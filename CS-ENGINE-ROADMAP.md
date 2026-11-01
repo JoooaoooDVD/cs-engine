@@ -219,3 +219,59 @@ Inspect existing architecture → reuse → no duplicate implementations → low
 
 ### Next sprint
 **Sprint 2a — Skin & Cape bridge** (after device confirmation of Round 70): launcher `LocalSkinStore` → `cs_launch` → engine render of own skin/cape for offline and MSA accounts, cape toggle, persistence; tests; CI; device test (Steve/Alex, legacy skin, cape on/off, switch skin between launches).
+
+## Round 72 — Desktop-like virtual mouse, control-editor crash, in-game Skin & Cape (Sprint 2b)
+
+Priority order from the brief: (1) virtual mouse behaves like a desktop cursor, (2) `InflateException`
+in the control-button editor, (3) touch across devices (diagnostics from Round 70 stay in place),
+(4) offline-account Skin & Cape management in game, (5) CS skin system ↔ engine bridge,
+(6) hot switching + persistence, (7) rest of the roadmap.
+
+### 1. Virtual mouse (reuses the CS cursor/touchpad — no second mouse system)
+* Root cause: `GameActivity.toggleMouse()` returned silently while the engine had the pointer
+  captured (world) and the cursor state was not owned by the engine activity, so the Mouse button
+  looked dead and the cursor could vanish after a grab/release cycle.
+* Fix: `GameActivity.setMouseToggleHandler(Runnable)` — the Java engine path is untouched;
+  `HorizonGameActivity` owns a persistent `mMouseWanted` flag. While wanted the CS cursor view stays
+  VISIBLE → `InGUIEventProcessor` runs in touchpad mode (drag moves the cursor with the mouse-speed
+  preference, tap = left click at the cursor, scroll / right-click control buttons act at the cursor);
+  the cursor is drawn whenever the engine is not capturing the pointer (menus, inventory, chat) and
+  hides itself during capture (`GameCursorView.onGrabState`) — it reappears by itself when a menu
+  opens, exactly like a desktop. Off = plain touch again (absolute taps). Toast tells the user when
+  it was enabled inside the world. Menu item "Mouse: on/off" mirrors the control button;
+  `mouse_wanted` added to `cs-input-diagnostics.json`.
+* Engine: unchanged (host mode already uses `InputHost::KeyboardMouse`, absolute cursor via
+  `nativeHostCursor`, grab over `nativeHostPoll` bit 0).
+
+### 2. `InflateException layout/dialog_control_button_setting` (MaterialSwitch)
+* Root cause: `HorizonGameActivity` is a `NativeActivity` with the plain framework fullscreen theme
+  (needed by the engine surface); `ControlLayout.editControlButton()` inflates the editor with the
+  overlay view's context → Material components require an AppCompat/Material theme → crash.
+* Fix: the overlay root, every inflater, dialog and toast of the engine activity use
+  `ContextThemeWrapper(this, R.style.AppTheme)` (the launcher's Material 3 theme). The manifest theme
+  stays — only the view hierarchy gets the launcher theme.
+
+### 3–6. Skin & Cape for CS Engine (engine fork d31db5cfc + launcher)
+* Engine (`skins.rs`): offline skin/cape are now reloadable (`set_offline_skin(path, model)`,
+  `set_offline_cape(path)`, `offline_generation()`); the env-var load Horizon's launcher used still
+  works. `game/remote.rs` re-uploads the textures into the existing slots when the generation changes
+  → **hot switch without rejoin**. New `HostEvent::Skin` + JNI `nativeHostSkin(skin, model, cape)`;
+  `cs_launch` JSON gains `skin`, `skin_model`, `cape`. Unit test extended (generation bump, bad file
+  keeps the previous skin, remove). CI checks the new JNI symbol.
+* Launcher: `HorizonSkins` bridge — per-profile selection keys `csengine:<profile>` stored in the
+  existing `SkinLibrary` / `LocalSkinStore` indices (fallback: the account's own selection), so it
+  survives restarts and launcher updates. `HorizonLaunch` passes the files at start.
+  `HorizonSkinDialog` (menu → "Account · Skin & Cape"): account header (name + Offline/Microsoft),
+  3D `PlayerPreviewView`, saved skins with face thumbnails, Steve/Alex model, **Import PNG** (system
+  picker; 64×64 / 64×32 validated), capes with front thumbnails + "None", Apply = save + hot switch.
+* Account rules: offline/local accounts always render the selection. Microsoft accounts keep their
+  official profile skin (the engine prefers the signed profile textures; only a missing cape is
+  filled) — authentication and the official upload flow are untouched; the page says so.
+* Not done on purpose: account switching inside a running game (session/ownership is decided at
+  launch; switching would need a relaunch) — the launcher's account list remains the place for it.
+
+### Device checklist for this round
+1. Mouse button in world → toast; open inventory → cursor visible, drag moves, tap clicks, Mouse
+   button again → touch. 2. Edit controls → tap a button → editor opens (no crash) and the switches
+   work. 3. Menu → Account · Skin & Cape → import a PNG → Apply → press F5 (third person): new skin
+   immediately; restart game → still there. 4. Microsoft account: official skin unchanged.
