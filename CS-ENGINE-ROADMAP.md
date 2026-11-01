@@ -112,3 +112,26 @@ Goal: turn the fork, step by step and without a rewrite, into an independently m
 3. Fork: title version line, edition banner, F3 header, loading lines, crash/exit report names → `cs-brand`.
 4. Fork + CSL2: library/process/path rename with migration; CSL2 strings/classes "CS Engine"; credits notice.
 5. CI build → your device test (title screen, F3, loading, crash report name, existing profile still plays without re-download).
+
+---
+
+## Sprint 1 report (2026-11-01) — CI passed, awaiting device test
+
+**Fork `JoooaoooDVD/horizon-android` main:** `56bbcb17e` + `a066860f7` — workflow run 41332725316 SUCCESS (tests / type-check+clippy / build / publish). Release `cs-engine-latest` = **CS Engine build 6** (`libcs_engine-arm64-v8a.so`, BUILD.json `engine: cs-engine`, `cs_engine_version: 1.0.0`, core 0.7.7).
+
+| Area | Change |
+|---|---|
+| `crates/cs-brand` (new) | Single source of identity: `NAME`, `TAGLINE`, `BRAND` (`cs-engine`), `LIB` (`cs_engine`), `VERSION` (`CS_ENGINE_VERSION`), `COMMIT`, `title_line()`, `full_version()`, `crash_report_title()` + unit test |
+| Title screen (`title.rs`) | `CS Engine 1.0.0 · Minecraft Java 26.3` + `Powered by Craft Studio` line; "Not affiliated with Mojang or Microsoft" kept |
+| Logo banner (`title_edition.rs`) | "JAVA EDITION" → **"CS EDITION"** (own C glyph, "EDITION" shifted to stay centred; resource-pack banners untouched); tests rewritten |
+| F3 (`debug_keys.rs`) | `Minecraft 26.3 (26.3/cs-engine)` + `CS Engine 1.0.0 (core 0.7.7, <commit>)` |
+| Crash report (`crash.rs`) | `---- CS Engine Crash Report ----`, `CS Engine Version`, `Engine Core Version`, saved/crashed lines |
+| Library | `libhorizon_android.so` → **`libcs_engine.so`**; JNI symbols unchanged |
+| CI (`cs-engine.yml`) | New host `tests` job (cs-brand, horizon-core, render identity tests) gates publish; env `CS_ENGINE_VERSION`/`CS_ENGINE_COMMIT`; release renamed; stale `libhorizon_android*` assets deleted |
+
+**CSL2 `ffe75d6`** — run 41334355127 SUCCESS; APK verified (`lib/arm64-v8a/libcs_engine.so`, BUILD.json build 6).
+Manifest `android.app.lib_name=cs_engine`, `HorizonNative.LIBRARY`, fetch script asset names, all EN + Hinglish strings "Horizon" → "CS Engine", home/picker labels, backend name, About credit "Horizon Android (MIT)". Internal ids (`engine=horizon`, class names, `<data>/horizon` home, `:horizon` process) unchanged → existing profiles/installs keep working without re-download.
+
+**Not in Sprint 1:** `banner_create_horizon.webp` artwork (image, not text), internal file/dir names, loading-screen text (vanilla's, no Horizon text there).
+
+**Device test checklist:** title shows `CS Engine 1.0.0 · Minecraft Java 26.3` + tagline; logo reads "CS EDITION" centred; F3 shows cs-engine lines; existing CS Engine profile launches without re-install; CS controls visible; crash report (if any) titled "CS Engine Crash Report".
