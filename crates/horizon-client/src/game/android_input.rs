@@ -147,6 +147,15 @@ impl Game<'_> {
             })
         })
     }
+    /// A text field the host keyboard types into has focus (see `pad_osk_output`).
+    fn host_text_field_focused(&mut self) -> bool {
+        self.pad_typing()
+            || self
+                .title
+                .as_mut()
+                .is_some_and(|title| title.focused_field().is_some())
+    }
+
     pub(super) fn android_custom_events(&mut self) {
         for (name, down) in self.pad.touch.key_events() {
             if let Some(mapping) = name.strip_prefix("action:") {
@@ -486,6 +495,24 @@ impl Game<'_> {
         for event in events {
             match event {
                 HostEvent::Key { token, down } => {
+                    // Enter / Backspace from the host's keyboard while a text field has focus
+                    // (chat, commands, signs, books, search boxes, world name): the host cannot
+                    // synthesize winit key events, and the custom-key path only reaches key
+                    // mappings, never the focused field — so they take the on-screen keyboard's
+                    // route, which the field already understands. Everything else stays a key.
+                    let editing = match token.as_str() {
+                        "key.keyboard.enter" | "key.keyboard.keypad.enter" => Some(Output::Enter),
+                        "key.keyboard.backspace" => Some(Output::Backspace),
+                        _ => None,
+                    };
+                    if let Some(output) = editing
+                        && self.host_text_field_focused()
+                    {
+                        if down {
+                            self.pad_osk_output(output);
+                        }
+                        continue;
+                    }
                     self.pad.touch.host_key(&token, down);
                     self.android_custom_events();
                 }
@@ -564,8 +591,14 @@ impl Game<'_> {
                     );
                 }
                 HostEvent::Text(text) => {
-                    if !text.is_empty() {
-                        self.pad_osk_output(Output::Text(text));
+                    // Some IMEs commit Enter as a newline in the text instead of a key event.
+                    for (i, part) in text.split('\n').enumerate() {
+                        if i > 0 && self.host_text_field_focused() {
+                            self.pad_osk_output(Output::Enter);
+                        }
+                        if !part.is_empty() {
+                            self.pad_osk_output(Output::Text(part.to_owned()));
+                        }
                     }
                 }
                 HostEvent::Skin { skin, model, cape } => {

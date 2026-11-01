@@ -894,7 +894,7 @@ impl Game<'_> {
     /// A text field has keyboard focus: chat, a sign, a book being written,
     /// a search box, the anvil's name, the title screens' and the options'
     /// fields, the LAN port.
-    fn pad_typing(&self) -> bool {
+    pub(super) fn pad_typing(&self) -> bool {
         (self.screen == Screen::Chat && self.title.is_none())
             || self.screen == Screen::CommandBlock
             || self.block_editor_typing()
