@@ -135,3 +135,45 @@ Manifest `android.app.lib_name=cs_engine`, `HorizonNative.LIBRARY`, fetch script
 **Not in Sprint 1:** `banner_create_horizon.webp` artwork (image, not text), internal file/dir names, loading-screen text (vanilla's, no Horizon text there).
 
 **Device test checklist:** title shows `CS Engine 1.0.0 · Minecraft Java 26.3` + tagline; logo reads "CS EDITION" centred; F3 shows cs-engine lines; existing CS Engine profile launches without re-install; CS controls visible; crash report (if any) titled "CS Engine Crash Report".
+
+---
+
+## Round 70 — Input compatibility (Priority 1–3) and the extended plan
+
+### Root causes found (source inspection, both repos)
+
+| # | Symptom | Root cause | Fix |
+|---|---|---|---|
+| 1 | Taps on "Continue"/menu buttons do nothing on some devices | The CS overlay reports the cursor in **overlay-window pixels**; the engine fed them straight in as render-target pixels. Horizon's own touches go through winit's `native_pointer_position` = `(point − content origin) × render-scale`. Any profile with **Resolution scale < 100%** (or a safe-inset/aspect letterbox) therefore landed every tap short of its button — device-specific only because it depends on the chosen scale/cutout. | Engine: `host_map_pointer()` applies the same mapping to every `HostEvent::Cursor`; geometry logged once per change. Launcher: engine window laid out edge-to-edge/short-edges like the control window so both cover the same pixels. |
+| 2 | After "Continue" the game sometimes stays un-captured / camera dead | The CS control window **holds Android window focus** (it owns touch and keyboard). When the focus callbacks arrive after the overlay attaches, the engine gets `Focused(false)`, which refuses pointer capture (`capture && !focused → return`) and drops look input. Timing differs per device/ROM. | Engine: in host mode `Focused(false)` is ignored (the host sends `ReleaseAll` on pause itself). |
+| 3 | Mouse control button does nothing | `GameActivity.toggleMouse()` uses a static `weakCursor` set only in `GameActivity.onCreate`. `HorizonGameActivity` runs in its own process and never registered its cursor view → `toggleMouse` returned early, always. | `GameActivity.registerCursorView()` called by `HorizonGameActivity`; `PREF_VIRTUAL_MOUSE_START` honoured too. Same cursor, same touchpad processor, same toggle — no second mouse system. |
+
+### Input diagnostics (no per-event logging)
+- Engine: `cs-exit.json` now carries `host_input: {pushed, processed, geometry:{window, render, origin, scale}}` + `cs_engine` version; one log line `CS host input: window …, render …, content origin …, pointer scale …, focused …` whenever the mapping changes.
+- Launcher: `<engine home>/cs-input-diagnostics.json` at pause/exit: device, Android, real display size/density, orientation, engine window / control window / input view sizes, `CallbackBridge.window*`, focus of both windows, grab state, cursor position/visibility, controls visible/path, backend counters (cursor/look/button/key/scroll/text sent, grab changes).
+- Reading it: `sent_button > 0` but `processed` ≈ 0 → events lost between JNI and the game loop; `processed` ≈ `pushed` but no reaction → mapping (`geometry`) or focus; `sent_* == 0` → the CS overlay never saw the touch (window layering/focus on that device).
+
+### Input compatibility requirements (standing)
+- Every host pointer coordinate goes through the same transform as native touches (render scale, insets, aspect).
+- Engine window and control window must cover identical screen pixels (both edge-to-edge, cutout short-edges).
+- Engine behaviour in host mode must not depend on Android window focus.
+- One cursor, one toggle, one touch processor: the CS control system's (`GameView`/`GameCursorView`), never a parallel engine mouse.
+- Any device-specific report is first answered with the two diagnostics files, not a guess.
+- Not "fixed" until confirmed on at least one device that previously failed.
+
+### Extended feature plan (M2–M4, in small testable milestones)
+**A. CS Engine settings (in-game section)** — FPS limiter, VSync, render resolution scaling, dynamic resolution, performance presets, low-end optimisation, render/simulation distance, graphics quality, particles, shadows, clouds, performance monitor, memory info. Per-profile where it makes sense (CSL2 instance JSON → `cs_launch` extras → engine config).
+**B. Advanced touch controls** — responsiveness, custom mapping, mouse sensitivity, cursor speed, touch sensitivity, gyroscope, gamepad customisation, in-game layout editing, opacity/size, quick mouse↔gameplay switch. All on top of the existing CS control system.
+**C. CS in-game menu** — controls, mouse mode, keyboard, performance, screenshots, engine settings, debug info, report problem. CS Launcher Plus design language.
+**D. Performance** — frame pacing, CPU/GPU/memory, chunk rendering, texture memory, shaders, device GPU compatibility. Only measurable wins (`record_performance` traces before/after); never at the cost of stability.
+**E. Customisation** — loading screens, pause menu, settings page, performance overlay, debug screen, branding, notifications. Gameplay stays recognisable.
+
+### Development priorities (order of work)
+1. Touchscreen + Continue button (done in code; device confirmation pending)
+2. Mouse button + cursor visibility (done in code; device confirmation pending)
+3. Input compatibility across devices (diagnostics shipped; collect from a failing device)
+4. Remaining M1 branding (create-profile artwork, loading/pause/notification polish)
+5. M2 settings + control enhancements
+6. Further CS Engine features (C, D, E)
+
+Rules: preserve working features; no unnecessary rewrites; keep CSL2 ↔ engine compatible; never break profiles; keep licence notices; GitHub Actions only; tests before publish; device-specific bugs are not "fixed" on CI green; lightweight ARM64 focus.
