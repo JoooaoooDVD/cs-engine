@@ -3,7 +3,7 @@
 name: CS engine (Horizon for CS Launcher Plus)
 on:
   push:
-    branches: [cs-host]
+    branches: [main]
     paths-ignore: ["docs/**", "**.md"]
   workflow_dispatch:
     inputs:
