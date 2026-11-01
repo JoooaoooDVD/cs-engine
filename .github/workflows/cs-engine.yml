@@ -72,7 +72,7 @@ jobs:
       - name: cargo test
         run: |
           cargo test -p cs-brand -p horizon-core
-          cargo test -p horizon-client-render --lib -- title_edition crash
+          cargo test -p horizon-client-render --lib -- title_edition crash skins::
 
   build:
     name: Build ${{ matrix.abi }}
@@ -127,7 +127,7 @@ jobs:
           "$NDK/llvm-objcopy" --only-keep-debug "$LIB" "symbols/libcs_engine-${{ matrix.abi }}.debug"
           "$NDK/llvm-strip" --strip-unneeded "out/${{ matrix.abi }}/libcs_engine.so"
           "$NDK/llvm-readelf" -h "out/${{ matrix.abi }}/libcs_engine.so" | grep -E "Class|Machine"
-          "$NDK/llvm-nm" -D "out/${{ matrix.abi }}/libcs_engine.so" | grep -E "ANativeActivity_onCreate|Java_com_craftstudio_cslauncher_engine_horizon_HorizonNative_nativeInstall" || { echo "::error::bridge symbols missing"; exit 1; }
+          "$NDK/llvm-nm" -D "out/${{ matrix.abi }}/libcs_engine.so" | grep -cE "ANativeActivity_onCreate|Java_com_craftstudio_cslauncher_engine_horizon_HorizonNative_nativeInstall|Java_com_craftstudio_cslauncher_engine_horizon_HorizonNative_nativeHostSkin" | grep -qx 3 || { echo "::error::bridge symbols missing"; exit 1; }
           ls -l "out/${{ matrix.abi }}" symbols
       - uses: actions/upload-artifact@v4
         if: steps.want.outputs.build == '1'

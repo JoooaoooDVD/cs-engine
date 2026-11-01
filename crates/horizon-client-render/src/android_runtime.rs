@@ -213,6 +213,9 @@ pub enum HostEvent {
     Text(String),
     /// Release every key and button the host pressed (focus loss).
     ReleaseAll,
+    /// The local player's own skin / cape changed in the host's Skin & Cape page: PNG paths
+    /// (empty = none) and `slim`/`classic`. Applied only where no account/server texture wins.
+    Skin { skin: String, model: String, cape: String },
 }
 static HOST_MODE: AtomicBool = AtomicBool::new(false);
 static HOST_GRAB: AtomicBool = AtomicBool::new(false);

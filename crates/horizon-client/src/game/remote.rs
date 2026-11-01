@@ -4558,13 +4558,18 @@ impl Game<'_> {
                 resolved.push((uuid, skin));
             }
         }
-        // An offline name's skin from the launcher, where neither the server
-        // nor an account gives the local player one.
+        // An offline name's skin from the launcher (or set by the CS host while playing),
+        // where neither the server nor an account gives the local player one. A new
+        // generation re-uploads the textures into their slots (hot skin/cape switch).
+        let generation = horizon_client::skins::offline_generation();
+        let changed = generation != self.offline_skin_generation;
+        self.offline_skin_generation = generation;
         if !resolved.iter().any(|(u, _)| *u == local)
-            && let Some((rgba, is_slim)) = horizon_client::skins::offline_skin()
+            && let Some(skin) = horizon_client::skins::offline_skin()
         {
             const OFFLINE: &str = "horizon/offline_skin";
-            if !self.skin_slots.contains(OFFLINE) {
+            let (rgba, is_slim) = &*skin;
+            if changed || !self.skin_slots.contains(OFFLINE) {
                 self.store_skin(OFFLINE.into(), rgba.clone());
             }
             if *is_slim {
@@ -4577,7 +4582,7 @@ impl Game<'_> {
             && let Some(rgba) = horizon_client::skins::offline_cape()
         {
             const OFFLINE: &str = "capes/offline";
-            if !self.skin_slots.contains(OFFLINE) {
+            if changed || !self.skin_slots.contains(OFFLINE) {
                 self.store_skin(OFFLINE.into(), rgba.to_vec());
             }
             capes.insert(local, OFFLINE.into());

@@ -68,6 +68,12 @@ pub struct Launch {
     pub host_input: bool,
     /// Resolution scale in percent (25–100); 0 keeps the value of `android-launcher.json`.
     pub render_scale: u32,
+    /// Local skin PNG (64x64 or 64x32) for the player where no account/server texture applies.
+    pub skin: String,
+    /// `slim` (Alex) or `classic` (Steve) for `skin`.
+    pub skin_model: String,
+    /// Local cape PNG (64x32 or 22x17) where the profile has none.
+    pub cape: String,
 }
 
 impl Launch {
@@ -248,6 +254,18 @@ pub fn run(app: AndroidApp, launch: Launch) {
             log::warn!("Previous Vulkan startup was interrupted; using OpenGL ES");
         }
         let renderer = launch.renderer(config.renderer);
+        // CS Skin & Cape: the launcher's selection for this profile (hot-switched later over
+        // `nativeHostSkin`). Offline/local accounts see it always; Microsoft accounts keep their
+        // official profile textures and only fill a missing cape with it.
+        let path = |p: &str| (!p.is_empty()).then(|| PathBuf::from(p));
+        if let Err(e) =
+            horizon_client::skins::set_offline_skin(path(&launch.skin).as_deref(), &launch.skin_model)
+        {
+            log::warn!("CS skin not loaded: {e}");
+        }
+        if let Err(e) = horizon_client::skins::set_offline_cape(path(&launch.cape).as_deref()) {
+            log::warn!("CS cape not loaded: {e}");
+        }
         if launch.host_input {
             // Mouse + keyboard semantics: cursor in menus, captured look in the world.
             crate::configure_input_mode(crate::catalog::InputHost::KeyboardMouse);
@@ -641,6 +659,21 @@ pub extern "system" fn Java_com_craftstudio_cslauncher_engine_horizon_HorizonNat
     if !text.is_empty() {
         host_push(HostEvent::Text(text));
     }
+}
+
+/// Skin & Cape changed in the host: PNG paths (empty = none) and `slim`/`classic`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_craftstudio_cslauncher_engine_horizon_HorizonNative_nativeHostSkin<'l>(
+    mut env: JNIEnv<'l>,
+    _class: JClass<'l>,
+    skin: JString<'l>,
+    model: JString<'l>,
+    cape: JString<'l>,
+) {
+    let skin = jstring_arg(&mut env, &skin);
+    let model = jstring_arg(&mut env, &model);
+    let cape = jstring_arg(&mut env, &cape);
+    host_push(HostEvent::Skin { skin, model, cape });
 }
 
 #[unsafe(no_mangle)]

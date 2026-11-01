@@ -568,6 +568,19 @@ impl Game<'_> {
                         self.pad_osk_output(Output::Text(text));
                     }
                 }
+                HostEvent::Skin { skin, model, cape } => {
+                    let path = |p: &str| (!p.is_empty()).then(|| std::path::PathBuf::from(p));
+                    if let Err(e) = horizon_client::skins::set_offline_skin(
+                        path(&skin).as_deref(),
+                        &model,
+                    ) {
+                        log::warn!("CS host skin not applied: {e}");
+                    }
+                    if let Err(e) = horizon_client::skins::set_offline_cape(path(&cape).as_deref())
+                    {
+                        log::warn!("CS host cape not applied: {e}");
+                    }
+                }
             }
         }
     }

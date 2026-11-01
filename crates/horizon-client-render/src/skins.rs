@@ -553,37 +553,84 @@ pub fn process_cape(width: u32, height: u32, rgba: &[u8]) -> Option<Vec<u8>> {
     Some(img)
 }
 
-/// The cape the launcher gives an offline name (`HORIZON_OFFLINE_CAPE`, a
-/// PNG's path; launcher/src/skins.rs), read once as `process_cape` lays it out.
-pub fn offline_cape() -> Option<&'static [u8]> {
-    static CAPE: std::sync::OnceLock<Option<Vec<u8>>> = std::sync::OnceLock::new();
-    CAPE.get_or_init(|| {
-        let path = std::env::var_os("HORIZON_OFFLINE_CAPE").filter(|p| !p.is_empty())?;
-        let image = std::fs::read(&path)
-            .map_err(|e| e.to_string())
-            .and_then(|bytes| crate::hud::decode_bytes(&bytes).map_err(|e| e.to_string()))
-            .and_then(|(w, h, rgba)| process_cape(w, h, &rgba).ok_or("not an image".into()));
-        image
-            .inspect_err(|e| eprintln!("Horizon: no offline cape ({}): {e}", path.display()))
-            .ok()
-    })
-    .as_deref()
+/// The local player's own skin and cape when neither the server nor an account gives one:
+/// from the launcher's environment (`HORIZON_OFFLINE_SKIN`, `HORIZON_OFFLINE_SKIN_MODEL`,
+/// `HORIZON_OFFLINE_CAPE`; Horizon's launcher) or set — and **re-set while the game runs** — by a
+/// host (CS Launcher Plus: Skin & Cape in the in-game menu, `set_offline_skin` / `set_offline_cape`).
+/// `offline_generation` changes with every update, so the renderer re-uploads the textures.
+struct OfflineTextures {
+    skin: Option<std::sync::Arc<(Vec<u8>, bool)>>,
+    cape: Option<std::sync::Arc<Vec<u8>>>,
+    generation: u64,
+    loaded_env: bool,
 }
-
-/// The skin the launcher gives an offline name (`HORIZON_OFFLINE_SKIN`, a
-/// PNG's path, and `HORIZON_OFFLINE_SKIN_MODEL`, `classic` or `slim`;
-/// launcher/src/skins.rs): its 64x64 RGBA as `process_legacy_skin` lays it
-/// out, and whether it is slim. Read once.
-pub fn offline_skin() -> Option<&'static (Vec<u8>, bool)> {
-    static SKIN: std::sync::OnceLock<Option<(Vec<u8>, bool)>> = std::sync::OnceLock::new();
-    SKIN.get_or_init(|| {
-        let path = std::env::var_os("HORIZON_OFFLINE_SKIN").filter(|p| !p.is_empty())?;
-        let model = std::env::var("HORIZON_OFFLINE_SKIN_MODEL").unwrap_or_default();
-        read_offline_skin(std::path::Path::new(&path), &model)
-            .inspect_err(|e| eprintln!("Horizon: no offline skin ({}): {e}", path.display()))
-            .ok()
-    })
-    .as_ref()
+static OFFLINE: std::sync::Mutex<OfflineTextures> = std::sync::Mutex::new(OfflineTextures {
+    skin: None,
+    cape: None,
+    generation: 0,
+    loaded_env: false,
+});
+fn offline() -> std::sync::MutexGuard<'static, OfflineTextures> {
+    let mut o = OFFLINE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !o.loaded_env {
+        o.loaded_env = true;
+        if let Some(path) = std::env::var_os("HORIZON_OFFLINE_SKIN").filter(|p| !p.is_empty()) {
+            let model = std::env::var("HORIZON_OFFLINE_SKIN_MODEL").unwrap_or_default();
+            match read_offline_skin(std::path::Path::new(&path), &model) {
+                Ok(skin) => o.skin = Some(std::sync::Arc::new(skin)),
+                Err(e) => eprintln!("Horizon: no offline skin ({}): {e}", path.to_string_lossy()),
+            }
+        }
+        if let Some(path) = std::env::var_os("HORIZON_OFFLINE_CAPE").filter(|p| !p.is_empty()) {
+            match read_offline_cape(std::path::Path::new(&path)) {
+                Ok(cape) => o.cape = Some(std::sync::Arc::new(cape)),
+                Err(e) => eprintln!("Horizon: no offline cape ({}): {e}", path.to_string_lossy()),
+            }
+        }
+    }
+    o
+}
+/// The offline cape (64x64 slot layout, `process_cape`), if any.
+pub fn offline_cape() -> Option<std::sync::Arc<Vec<u8>>> {
+    offline().cape.clone()
+}
+/// The offline skin (64x64 RGBA, `process_legacy_skin`) and whether it is slim, if any.
+pub fn offline_skin() -> Option<std::sync::Arc<(Vec<u8>, bool)>> {
+    offline().skin.clone()
+}
+/// Changes with every `set_offline_skin` / `set_offline_cape`.
+pub fn offline_generation() -> u64 {
+    offline().generation
+}
+/// Replace (or with `None` remove) the offline skin; `model` is `slim` or `classic`.
+/// `Err` leaves the previous skin in place.
+pub fn set_offline_skin(path: Option<&std::path::Path>, model: &str) -> Result<(), String> {
+    let skin = match path {
+        Some(path) => Some(std::sync::Arc::new(read_offline_skin(path, model)?)),
+        None => None,
+    };
+    let mut o = offline();
+    o.skin = skin;
+    o.generation += 1;
+    Ok(())
+}
+/// Replace (or with `None` remove) the offline cape. `Err` leaves the previous cape in place.
+pub fn set_offline_cape(path: Option<&std::path::Path>) -> Result<(), String> {
+    let cape = match path {
+        Some(path) => Some(std::sync::Arc::new(read_offline_cape(path)?)),
+        None => None,
+    };
+    let mut o = offline();
+    o.cape = cape;
+    o.generation += 1;
+    Ok(())
+}
+fn read_offline_cape(path: &std::path::Path) -> Result<Vec<u8>, String> {
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let (w, h, rgba) = crate::hud::decode_bytes(&bytes).map_err(|e| e.to_string())?;
+    process_cape(w, h, &rgba).ok_or_else(|| "not a cape image".to_owned())
 }
 fn read_offline_skin(path: &std::path::Path, model: &str) -> Result<(Vec<u8>, bool), String> {
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
@@ -1011,6 +1058,24 @@ mod tests {
         std::fs::write(&file, b"not a png").unwrap();
         assert!(super::read_offline_skin(&file, "slim").is_err());
         assert!(super::read_offline_skin(&dir.join("missing.png"), "").is_err());
+        // CS host hot switch: a set bumps the generation; a bad file leaves the old one.
+        let before = super::offline_generation();
+        std::fs::write(&file, png(64, 64).0).unwrap();
+        super::set_offline_skin(Some(&file), "slim").unwrap();
+        assert_eq!(super::offline_generation(), before + 1);
+        assert!(super::offline_skin().is_some_and(|s| s.1));
+        assert!(super::set_offline_skin(Some(&dir.join("missing.png")), "slim").is_err());
+        assert_eq!(super::offline_generation(), before + 1);
+        assert!(super::offline_skin().is_some());
+        super::set_offline_skin(None, "").unwrap();
+        assert!(super::offline_skin().is_none());
+        assert_eq!(super::offline_generation(), before + 2);
+        let cape = dir.join("cape.png");
+        std::fs::write(&cape, png(64, 32).0).unwrap();
+        super::set_offline_cape(Some(&cape)).unwrap();
+        assert!(super::offline_cape().is_some_and(|c| c.len() == 64 * 64 * 4));
+        super::set_offline_cape(None).unwrap();
+        assert!(super::offline_cape().is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
