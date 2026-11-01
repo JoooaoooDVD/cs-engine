@@ -106,6 +106,7 @@ def main():
     parser.add_argument('--check', action='store_true', help='Only type-check the Android target')
     parser.add_argument('--clippy', action='store_true', help='Run Android Clippy with warnings denied')
     parser.add_argument('--bootstrap', type=Path, help=argparse.SUPPRESS)  # Old scripts: no longer used.
+    parser.add_argument('--cs-host', action='store_true', help='CS Launcher Plus host build: enable the cs-host cargo feature (intent launch + JNI installer, no Rust launcher UI)')
     args = parser.parse_args()
     if args.profile is None:
         args.profile = 'release' if args.public or args.release_candidate else 'fast'
@@ -125,6 +126,8 @@ def main():
     legacy = args.abi in ('armeabi-v7a', 'x86')
     min_sdk = 27 if legacy else 28
     features = ['--no-default-features', '--features', 'audio'] if legacy else []
+    if args.cs_host:
+        features = ['--no-default-features', '--features', 'audio,cs-host'] if legacy else ['--features', 'cs-host']
     manifests = [(['-p', 'horizon-android'], features)]
     environment = dict(os.environ)
     environment['PATH'] = os.pathsep.join([str(ndk / 'bin'), str(args.java_home / 'bin'), environment['PATH']])

@@ -73,6 +73,8 @@ default = ["mods", "audio"]
 audio = ["horizon-client/audio"]
 controllers = []
 mods = ["horizon-client/mods", "horizon-mods/runtime"]
+# CS Launcher Plus host: play from a `cs_launch` intent, install over JNI; the Rust launcher UI is skipped.
+cs-host = []
 
 [lints]
 workspace = true

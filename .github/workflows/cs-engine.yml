@@ -1,0 +1,192 @@
+# CS Launcher Plus engine artefacts: libhorizon_android.so (cs-host feature) + engine tables.
+# The CS Launcher Plus build downloads the "cs-engine-latest" release assets; nothing is built locally.
+name: CS engine (Horizon for CS Launcher Plus)
+on:
+  push:
+    branches: [cs-host]
+    paths-ignore: ["docs/**", "**.md"]
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Cargo profile (release = ThinLTO, slower; fast = no LTO)
+        type: choice
+        options: [release, fast]
+        default: release
+      abis:
+        description: ABIs to build (comma separated; arm64-v8a, x86_64)
+        default: arm64-v8a
+      publish:
+        description: Update the cs-engine-latest prerelease
+        type: boolean
+        default: true
+permissions:
+  contents: write
+concurrency:
+  group: cs-engine-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  HORIZON_TELEMETRY_URL: "off"
+  CARGO_TARGET_DIR: .local/ci-target
+  CARGO_TERM_COLOR: always
+  # Upstream public APK whose generated engine tables match this source (tools unchanged since v0.7.6).
+  ENGINE_DATA_APK_URL: https://github.com/Vasysik/horizon-android/releases/download/v0.7.6/Horizon-Android-0.7.6-arm64-v8a.apk
+  ENGINE_DATA_APK_SHA256: ""
+jobs:
+  check:
+    name: Type-check (arm64-v8a, cs-host)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install Android toolchain
+        run: |
+          sdkmanager "ndk;28.2.13676358" "build-tools;35.0.0" > /dev/null
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: cs-engine-arm64
+          workspaces: ". -> .local/ci-target"
+      - name: cargo check (cs-host)
+        run: python3 tools/android_build.py --abi arm64-v8a --check --public --cs-host --sdk "$ANDROID_HOME" --java-home "$JAVA_HOME_17_X64"
+
+  build:
+    name: Build ${{ matrix.abi }}
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - abi: arm64-v8a
+            target: aarch64-linux-android
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Skip ABIs not requested
+        id: want
+        run: |
+          WANT="${{ github.event.inputs.abis || 'arm64-v8a' }}"
+          if [[ ",$WANT," == *",${{ matrix.abi }},"* ]]; then echo "build=1" >> "$GITHUB_OUTPUT"; else echo "build=0" >> "$GITHUB_OUTPUT"; fi
+      - name: Install Android toolchain
+        if: steps.want.outputs.build == '1'
+        run: |
+          sdkmanager "ndk;28.2.13676358" "build-tools;35.0.0" > /dev/null
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add "${{ matrix.target }}"
+      - uses: Swatinem/rust-cache@v2
+        if: steps.want.outputs.build == '1'
+        with:
+          shared-key: cs-engine-${{ matrix.abi }}
+          workspaces: ". -> .local/ci-target"
+      - name: Build libhorizon_android.so (cs-host)
+        if: steps.want.outputs.build == '1'
+        env:
+          PROFILE: ${{ github.event.inputs.profile || 'release' }}
+        run: |
+          python3 tools/android_build.py --abi "${{ matrix.abi }}" --public --rust-only --cs-host --profile "$PROFILE" --sdk "$ANDROID_HOME" --java-home "$JAVA_HOME_17_X64"
+      - name: Strip and collect
+        if: steps.want.outputs.build == '1'
+        env:
+          PROFILE: ${{ github.event.inputs.profile || 'release' }}
+        run: |
+          set -e
+          NDK="$ANDROID_HOME/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          LIB=".local/ci-target/${{ matrix.target }}/$PROFILE/libhorizon_android.so"
+          test -f "$LIB"
+          mkdir -p "out/${{ matrix.abi }}" symbols
+          cp "$LIB" "out/${{ matrix.abi }}/libhorizon_android.so"
+          "$NDK/llvm-objcopy" --only-keep-debug "$LIB" "symbols/libhorizon_android-${{ matrix.abi }}.debug"
+          "$NDK/llvm-strip" --strip-unneeded "out/${{ matrix.abi }}/libhorizon_android.so"
+          "$NDK/llvm-readelf" -h "out/${{ matrix.abi }}/libhorizon_android.so" | grep -E "Class|Machine"
+          "$NDK/llvm-nm" -D "out/${{ matrix.abi }}/libhorizon_android.so" | grep -E "ANativeActivity_onCreate|Java_com_craftstudio_cslauncher_engine_horizon_HorizonNative_nativeInstall" || { echo "::error::bridge symbols missing"; exit 1; }
+          ls -l "out/${{ matrix.abi }}" symbols
+      - uses: actions/upload-artifact@v4
+        if: steps.want.outputs.build == '1'
+        with:
+          name: horizon-${{ matrix.abi }}
+          path: |
+            out/${{ matrix.abi }}/libhorizon_android.so
+            symbols/*.debug
+          if-no-files-found: error
+
+  engine-data:
+    name: Engine tables + notices
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Extract engine-data.zip from the pinned upstream public APK
+        run: |
+          set -e
+          curl -fsSL -o upstream.apk "$ENGINE_DATA_APK_URL"
+          if [ -n "$ENGINE_DATA_APK_SHA256" ]; then echo "$ENGINE_DATA_APK_SHA256  upstream.apk" | sha256sum -c -; fi
+          unzip -o -q upstream.apk assets/engine-data.zip
+          mkdir -p out
+          mv assets/engine-data.zip out/engine-data.zip
+          python3 - <<'EOF'
+          import zipfile, json
+          z = zipfile.ZipFile('out/engine-data.zip'); names = z.namelist()
+          assert 'horizon-resources.json' in names and 'registries.json' in names, names[:10]
+          print(len(names), 'engine table files')
+          EOF
+          cp LICENSE out/LICENSE.txt
+          cp THIRD_PARTY_NOTICES.md out/THIRD_PARTY_NOTICES.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: horizon-engine-data
+          path: out/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish cs-engine-latest
+    needs: [build, engine-data]
+    if: ${{ always() && needs.build.result == 'success' && needs.engine-data.result == 'success' && (github.event_name == 'push' || github.event.inputs.publish == 'true') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Assemble release files
+        run: |
+          set -e
+          mkdir -p release
+          for abi in arm64-v8a x86_64; do
+            if [ -f "artifacts/horizon-$abi/out/$abi/libhorizon_android.so" ]; then
+              cp "artifacts/horizon-$abi/out/$abi/libhorizon_android.so" "release/libhorizon_android-$abi.so"
+              cp artifacts/horizon-$abi/symbols/*.debug release/ 2>/dev/null || true
+            fi
+          done
+          cp artifacts/horizon-engine-data/engine-data.zip release/
+          cp artifacts/horizon-engine-data/LICENSE.txt artifacts/horizon-engine-data/THIRD_PARTY_NOTICES.md release/
+          VERSION=$(grep -oP "versionName '\K[^']+" packaging/android/build.gradle | head -1)
+          (cd release && sha256sum * > SHA256SUMS.txt)
+          python3 - "$VERSION" <<'EOF'
+          import json, sys, hashlib, os, subprocess
+          files = {n: hashlib.sha256(open('release/'+n,'rb').read()).hexdigest() for n in sorted(os.listdir('release')) if n != 'SHA256SUMS.txt'}
+          json.dump({"schema": 1, "engine": "horizon-android", "version": sys.argv[1], "minecraft": "26.3",
+                     "commit": os.environ.get("GITHUB_SHA"), "run": os.environ.get("GITHUB_RUN_NUMBER"),
+                     "feature": "cs-host", "files": files}, open('release/BUILD.json','w'), indent=2)
+          EOF
+          ls -l release
+      - name: Update cs-engine-latest prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: cs-engine-latest
+          name: CS engine build ${{ github.run_number }}
+          prerelease: true
+          body: |
+            Horizon engine for CS Launcher Plus (feature `cs-host`), built from `${{ github.sha }}`.
+            Files: `libhorizon_android-<abi>.so` (stripped), `*.debug` symbols, `engine-data.zip`, notices, `BUILD.json`, `SHA256SUMS.txt`.
+            Upstream: https://github.com/Vasysik/horizon-android (MIT). Minecraft resources are downloaded on the device from official sources only.
+          files: release/*

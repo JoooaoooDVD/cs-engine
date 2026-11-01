@@ -8,6 +8,9 @@ mod game;
 mod game_launch;
 #[path = "android/launcher.rs"]
 mod launcher;
+#[cfg(feature = "cs-host")]
+#[path = "android/cs_bridge.rs"]
+mod cs_bridge;
 // Share the desktop launcher's actual search, compatibility checks, downloads,
 // dependency resolution and Java content porting; GPUI itself is desktop-only.
 // These files are formatted in the launcher's separate Rust 2021 workspace.
@@ -208,6 +211,11 @@ fn android_main(app: AndroidApp) {
         app.enable_motion_axis(axis);
     }
     init_logging();
+    #[cfg(feature = "cs-host")]
+    if let Some(launch) = cs_bridge::launch_from_intent(&app) {
+        cs_bridge::run(app, launch);
+        return;
+    }
     let Some(home) = app.internal_data_path() else {
         log::error!("Android supplied no application data directory");
         return;
