@@ -1,6 +1,6 @@
-# CS Launcher Plus engine artefacts: libhorizon_android.so (cs-host feature) + engine tables.
+# CS Engine (Powered by Craft Studio) artefacts for CS Launcher Plus: libcs_engine.so (cs-host feature) + engine tables.
 # The CS Launcher Plus build downloads the "cs-engine-latest" release assets; nothing is built locally.
-name: CS engine (Horizon for CS Launcher Plus)
+name: CS Engine
 on:
   push:
     branches: [main]
@@ -29,6 +29,9 @@ env:
   CARGO_TARGET_DIR: .local/ci-target
   CARGO_TERM_COLOR: always
   # Upstream public APK whose generated engine tables match this source (tools unchanged since v0.7.6).
+  # CS Engine product version (crates/cs-brand reads it at compile time); the Horizon core version stays in release.rs.
+  CS_ENGINE_VERSION: 1.0.0
+  CS_ENGINE_COMMIT: ${{ github.sha }}
   ENGINE_DATA_APK_URL: https://github.com/Vasysik/horizon-android/releases/download/v0.7.6/Horizon-Android-0.7.6-arm64-v8a.apk
   ENGINE_DATA_APK_SHA256: ""
 jobs:
@@ -53,6 +56,23 @@ jobs:
           workspaces: ". -> .local/ci-target"
       - name: cargo check (cs-host)
         run: python3 tools/android_build.py --abi arm64-v8a --check --public --cs-host --sdk "$ANDROID_HOME" --java-home "$JAVA_HOME_17_X64"
+
+  tests:
+    name: Unit tests (host; cs-brand, core, render identity)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: cs-engine-host-tests
+      - name: cargo test
+        run: |
+          cargo test -p cs-brand -p horizon-core
+          cargo test -p horizon-client-render --lib -- title_edition crash
 
   build:
     name: Build ${{ matrix.abi }}
@@ -87,7 +107,7 @@ jobs:
         with:
           shared-key: cs-engine-${{ matrix.abi }}
           workspaces: ". -> .local/ci-target"
-      - name: Build libhorizon_android.so (cs-host)
+      - name: Build libcs_engine.so (cs-host)
         if: steps.want.outputs.build == '1'
         env:
           PROFILE: ${{ github.event.inputs.profile || 'release' }}
@@ -100,21 +120,21 @@ jobs:
         run: |
           set -e
           NDK="$ANDROID_HOME/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          LIB=".local/ci-target/${{ matrix.target }}/$PROFILE/libhorizon_android.so"
+          LIB=".local/ci-target/${{ matrix.target }}/$PROFILE/libcs_engine.so"
           test -f "$LIB"
           mkdir -p "out/${{ matrix.abi }}" symbols
-          cp "$LIB" "out/${{ matrix.abi }}/libhorizon_android.so"
-          "$NDK/llvm-objcopy" --only-keep-debug "$LIB" "symbols/libhorizon_android-${{ matrix.abi }}.debug"
-          "$NDK/llvm-strip" --strip-unneeded "out/${{ matrix.abi }}/libhorizon_android.so"
-          "$NDK/llvm-readelf" -h "out/${{ matrix.abi }}/libhorizon_android.so" | grep -E "Class|Machine"
-          "$NDK/llvm-nm" -D "out/${{ matrix.abi }}/libhorizon_android.so" | grep -E "ANativeActivity_onCreate|Java_com_craftstudio_cslauncher_engine_horizon_HorizonNative_nativeInstall" || { echo "::error::bridge symbols missing"; exit 1; }
+          cp "$LIB" "out/${{ matrix.abi }}/libcs_engine.so"
+          "$NDK/llvm-objcopy" --only-keep-debug "$LIB" "symbols/libcs_engine-${{ matrix.abi }}.debug"
+          "$NDK/llvm-strip" --strip-unneeded "out/${{ matrix.abi }}/libcs_engine.so"
+          "$NDK/llvm-readelf" -h "out/${{ matrix.abi }}/libcs_engine.so" | grep -E "Class|Machine"
+          "$NDK/llvm-nm" -D "out/${{ matrix.abi }}/libcs_engine.so" | grep -E "ANativeActivity_onCreate|Java_com_craftstudio_cslauncher_engine_horizon_HorizonNative_nativeInstall" || { echo "::error::bridge symbols missing"; exit 1; }
           ls -l "out/${{ matrix.abi }}" symbols
       - uses: actions/upload-artifact@v4
         if: steps.want.outputs.build == '1'
         with:
           name: horizon-${{ matrix.abi }}
           path: |
-            out/${{ matrix.abi }}/libhorizon_android.so
+            out/${{ matrix.abi }}/libcs_engine.so
             symbols/*.debug
           if-no-files-found: error
 
@@ -150,7 +170,7 @@ jobs:
 
   publish:
     name: Publish cs-engine-latest
-    needs: [build, engine-data]
+    needs: [build, engine-data, tests]
     if: ${{ always() && needs.build.result == 'success' && needs.engine-data.result == 'success' && (github.event_name == 'push' || github.event.inputs.publish == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -166,8 +186,8 @@ jobs:
           set -e
           mkdir -p release
           for abi in arm64-v8a x86_64; do
-            if [ -f "artifacts/horizon-$abi/out/$abi/libhorizon_android.so" ]; then
-              cp "artifacts/horizon-$abi/out/$abi/libhorizon_android.so" "release/libhorizon_android-$abi.so"
+            if [ -f "artifacts/horizon-$abi/out/$abi/libcs_engine.so" ]; then
+              cp "artifacts/horizon-$abi/out/$abi/libcs_engine.so" "release/libcs_engine-$abi.so"
               cp artifacts/horizon-$abi/symbols/*.debug release/ 2>/dev/null || true
             fi
           done
@@ -178,7 +198,7 @@ jobs:
           python3 - "$VERSION" <<'EOF'
           import json, sys, hashlib, os, subprocess
           files = {n: hashlib.sha256(open('release/'+n,'rb').read()).hexdigest() for n in sorted(os.listdir('release')) if n != 'SHA256SUMS.txt'}
-          json.dump({"schema": 1, "engine": "horizon-android", "version": sys.argv[1], "minecraft": "26.3",
+          json.dump({"schema": 1, "engine": "cs-engine", "name": "CS Engine", "tagline": "Powered by Craft Studio", "cs_engine_version": os.environ.get("CS_ENGINE_VERSION"), "lib": "libcs_engine.so", "version": sys.argv[1], "minecraft": "26.3",
                      "commit": os.environ.get("GITHUB_SHA"), "run": os.environ.get("GITHUB_RUN_NUMBER"),
                      "feature": "cs-host", "files": files}, open('release/BUILD.json','w'), indent=2)
           EOF
@@ -187,10 +207,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: cs-engine-latest
-          name: CS engine build ${{ github.run_number }}
+          name: CS Engine build ${{ github.run_number }}
           prerelease: true
           body: |
-            Horizon engine for CS Launcher Plus (feature `cs-host`), built from `${{ github.sha }}`.
-            Files: `libhorizon_android-<abi>.so` (stripped), `*.debug` symbols, `engine-data.zip`, notices, `BUILD.json`, `SHA256SUMS.txt`.
-            Upstream: https://github.com/Vasysik/horizon-android (MIT). Minecraft resources are downloaded on the device from official sources only.
+            CS Engine ${{ env.CS_ENGINE_VERSION }} (Powered by Craft Studio) for CS Launcher Plus, built from `${{ github.sha }}`.
+            Files: `libcs_engine-<abi>.so` (stripped), `*.debug` symbols, `engine-data.zip`, notices, `BUILD.json`, `SHA256SUMS.txt`.
+            Built on Horizon Android (https://github.com/Vasysik/horizon-android, MIT). Minecraft resources are downloaded on the device from official sources only.
           files: release/*

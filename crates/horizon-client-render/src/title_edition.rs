@@ -1,14 +1,14 @@
-//! "RUST EDITION" under the classic title screen's logo.
+//! "CS EDITION" under the classic title screen's logo (CS Engine identity).
 //!
-//! Vanilla's `textures/gui/title/edition.png` reads "JAVA EDITION". Horizon
+//! Vanilla's `textures/gui/title/edition.png` reads "JAVA EDITION". The engine
 //! never ships Mojang's art, so the banner is rebuilt at load time from the
-//! player's own texture: "EDITION" is kept column for column, the "T" is lifted
-//! out of it, and R, U and S are Horizon's own glyphs (MIT, the rectangles
-//! below), drawn the way the texture's letters are built (a face with darker
-//! sides and a light bottom edge, a dark extrusion under it, a black outline
-//! and a soft rim) in the shades sampled from the texture itself. Only
-//! vanilla 26.3's exact texture is rebuilt: a resource pack's edition.png
-//! stays as its author drew it.
+//! player's own texture: "EDITION" is kept column for column (moved left so the
+//! shorter word stays centred), and C and S are our own glyphs (the rectangles
+//! below; the technique is Horizon's "RUST EDITION", MIT), drawn the way the
+//! texture's letters are built (a face with darker sides and a light bottom
+//! edge, a dark extrusion under it, a black outline and a soft rim) in the
+//! shades sampled from the texture itself. Only vanilla 26.3's exact texture is
+//! rebuilt: a resource pack's edition.png stays as its author drew it.
 
 use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
@@ -21,31 +21,29 @@ const HEIGHT: usize = 64;
 const VANILLA: u64 = 0x4249_0538_6dfb_181f;
 /// "EDITION", outline included, starts at this column; left of it is "JAVA".
 const EDITION_START: usize = 204;
-/// The columns of the "T"'s body (face and extrusion) inside "EDITION".
-const T_BODY: (usize, usize) = (335, 376);
 /// Where the texture's letters put their faces, and how deep they are drawn.
 const FACE_TOP: usize = 4;
 const EXTRUSION: usize = 8;
 const OUTLINE: usize = 3;
 /// The face-to-face spacing between letters.
 const LETTER_GAP: usize = 6;
-/// The new glyphs' face width: "RUST" then spans "JAVA"'s columns to within
-/// a texel, so "EDITION" stays where it is and the banner stays centred.
+/// The new glyphs' face width (as "RUST"'s letters, 42 wide and 39 tall).
 const GLYPH_WIDTH: usize = 42;
-/// The first face column, as "JAVA"'s.
-const FIRST_FACE: usize = 4;
+/// "JAVA" spanned columns 4..190; "CS" (two glyphs and a gap) is 90 wide, so the
+/// whole word pair moves right by half the difference and "EDITION" moves left
+/// by the other half: the banner stays centred on the logo.
+const SHIFT: usize = 48;
+/// The first face column of "CS".
+const FIRST_FACE: usize = 4 + SHIFT;
+/// Where the moved "EDITION" starts; everything left of it is ours.
+const LETTERS_END: usize = EDITION_START - SHIFT;
 
-/// Horizon's R, U and S: face rectangles `[x0, y0, x1, y1)` in texels from the
-/// face's top-left, 42 wide and 39 tall, with 11-texel stems, 10-texel bars and
-/// 7-texel notches for the rounded corners.
-const R: &[[usize; 4]] = &[
-    [0, 0, 11, 39],
-    [0, 0, 35, 10],
-    [31, 7, 42, 19],
-    [0, 15, 35, 25],
-    [31, 25, 42, 39],
-];
-const U: &[[usize; 4]] = &[[0, 0, 11, 32], [31, 0, 42, 32], [7, 29, 35, 39]];
+/// Our C: a top bar, a stem and a bottom bar, notched like the texture's letters.
+const C: &[[usize; 4]] = &[[7, 0, 42, 10], [0, 7, 11, 32], [7, 29, 42, 39]];
+
+/// Our S (Horizon's glyph, MIT): face rectangles `[x0, y0, x1, y1)` in texels
+/// from the face's top-left, 42 wide and 39 tall, with 11-texel stems, 10-texel
+/// bars and 7-texel notches for the rounded corners.
 const S: &[[usize; 4]] = &[
     [7, 0, 42, 10],
     [0, 7, 11, 19],
@@ -54,9 +52,9 @@ const S: &[[usize; 4]] = &[
     [0, 29, 35, 39],
 ];
 
-/// The banner rebuilt to read "RUST EDITION", or `None` when the texture is
+/// The banner rebuilt to read "CS EDITION", or `None` when the texture is
 /// not vanilla's (a resource pack's own).
-pub fn rust_edition(width: u32, height: u32, pixels: &[u8]) -> Option<Vec<u8>> {
+pub fn cs_edition(width: u32, height: u32, pixels: &[u8]) -> Option<Vec<u8>> {
     (fingerprint(width, height, pixels) == VANILLA).then(|| compose(pixels))
 }
 
@@ -129,7 +127,7 @@ impl Palette {
 /// Faces of the new glyphs, positioned in the texture.
 fn glyph_faces() -> Vec<bool> {
     let mut face = vec![false; WIDTH * HEIGHT];
-    for (i, glyph) in [R, U, S].into_iter().enumerate() {
+    for (i, glyph) in [C, S].into_iter().enumerate() {
         let left = FIRST_FACE + i * (GLYPH_WIDTH + LETTER_GAP);
         for &[x0, y0, x1, y1] in glyph {
             for y in FACE_TOP + y0..FACE_TOP + y1 {
@@ -140,11 +138,6 @@ fn glyph_faces() -> Vec<bool> {
         }
     }
     face
-}
-
-/// Where the "T" lifted from "EDITION" goes: one letter gap after the S.
-fn t_left() -> usize {
-    FIRST_FACE + 3 * (GLYPH_WIDTH + LETTER_GAP)
 }
 
 /// Draw faces within `columns` the way the texture's letters are drawn.
@@ -208,58 +201,6 @@ fn put(out: &mut [u8], x: usize, y: usize, p: Rgba) {
     }
 }
 
-/// Every pixel of "EDITION"'s "T": its body, and the outline pixels nearer to
-/// it than to its neighbours.
-fn t_pixels(pixels: &[u8]) -> Vec<(usize, usize)> {
-    const NONE: u8 = 0;
-    const T: u8 = 1;
-    const OTHER: u8 = 2;
-    let mut owner = vec![NONE; WIDTH * HEIGHT];
-    let mut queue = VecDeque::new();
-    for y in 0..HEIGHT {
-        for x in EDITION_START..WIDTH {
-            let p = pixel(pixels, x, y);
-            if p[3] == 255 && lum(p) >= 30 {
-                owner[y * WIDTH + x] = if (T_BODY.0..=T_BODY.1).contains(&x) {
-                    T
-                } else {
-                    OTHER
-                };
-                queue.push_back((x, y));
-            }
-        }
-    }
-    while let Some((x, y)) = queue.pop_front() {
-        let label = owner[y * WIDTH + x];
-        for (dx, dy) in [
-            (-1, -1),
-            (0, -1),
-            (1, -1),
-            (-1, 0),
-            (1, 0),
-            (-1, 1),
-            (0, 1),
-            (1, 1),
-        ] {
-            let (nx, ny) = (x as isize + dx, y as isize + dy);
-            if !(EDITION_START as isize..WIDTH as isize).contains(&nx)
-                || !(0..HEIGHT as isize).contains(&ny)
-            {
-                continue;
-            }
-            let (nx, ny) = (nx as usize, ny as usize);
-            if owner[ny * WIDTH + nx] == NONE && pixel(pixels, nx, ny)[3] > 0 {
-                owner[ny * WIDTH + nx] = label;
-                queue.push_back((nx, ny));
-            }
-        }
-    }
-    (0..HEIGHT)
-        .flat_map(|y| (EDITION_START..WIDTH).map(move |x| (x, y)))
-        .filter(|&(x, y)| owner[y * WIDTH + x] == T)
-        .collect()
-}
-
 /// Close the pockets left of "EDITION" that no gap reaches from outside, as
 /// the texture's letters fill their counters with the outline.
 fn fill_counters(out: &mut [u8], outline: Rgba) {
@@ -267,8 +208,8 @@ fn fill_counters(out: &mut [u8], outline: Rgba) {
     let mut seen = vec![false; WIDTH * HEIGHT];
     let mut queue = VecDeque::new();
     for y in 0..HEIGHT {
-        for x in 0..EDITION_START {
-            let border = x == 0 || y == 0 || x == EDITION_START - 1 || y == HEIGHT - 1;
+        for x in 0..LETTERS_END {
+            let border = x == 0 || y == 0 || x == LETTERS_END - 1 || y == HEIGHT - 1;
             if border && open(out, x, y) {
                 seen[y * WIDTH + x] = true;
                 queue.push_back((x, y));
@@ -278,7 +219,7 @@ fn fill_counters(out: &mut [u8], outline: Rgba) {
     while let Some((x, y)) = queue.pop_front() {
         for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
             let (nx, ny) = (x as isize + dx, y as isize + dy);
-            if !(0..EDITION_START as isize).contains(&nx) || !(0..HEIGHT as isize).contains(&ny) {
+            if !(0..LETTERS_END as isize).contains(&nx) || !(0..HEIGHT as isize).contains(&ny) {
                 continue;
             }
             let (nx, ny) = (nx as usize, ny as usize);
@@ -289,7 +230,7 @@ fn fill_counters(out: &mut [u8], outline: Rgba) {
         }
     }
     for y in 0..HEIGHT {
-        for x in 0..EDITION_START {
+        for x in 0..LETTERS_END {
             if !seen[y * WIDTH + x] && open(out, x, y) {
                 out[(y * WIDTH + x) * 4..][..4].copy_from_slice(&outline);
             }
@@ -301,13 +242,13 @@ fn fill_counters(out: &mut [u8], outline: Rgba) {
 /// (the "T"'s right side shared its outline with the next letter).
 fn soften_edges(out: &mut [u8], soft: Rgba) {
     let opaque = |out: &[u8], x: isize, y: isize| {
-        (0..EDITION_START as isize).contains(&x)
+        (0..LETTERS_END as isize).contains(&x)
             && (0..HEIGHT as isize).contains(&y)
             && pixel(out, x as usize, y as usize)[3] == 255
     };
     let mut rim = Vec::new();
     for y in 0..HEIGHT {
-        for x in 0..EDITION_START {
+        for x in 0..LETTERS_END {
             let (xi, yi) = (x as isize, y as isize);
             let near = (-1..=1).any(|dy| (-1..=1).any(|dx| opaque(out, xi + dx, yi + dy)));
             if pixel(out, x, y)[3] == 0 && near {
@@ -320,19 +261,18 @@ fn soften_edges(out: &mut [u8], soft: Rgba) {
     }
 }
 
-/// "RUST" in place of "JAVA"; `pixels` is a 512x64 RGBA banner laid out as
-/// vanilla's.
+/// "CS" in place of "JAVA", "EDITION" moved left by `SHIFT`; `pixels` is a
+/// 512x64 RGBA banner laid out as vanilla's.
 fn compose(pixels: &[u8]) -> Vec<u8> {
     let palette = Palette::sample(pixels);
-    let mut out = pixels.to_vec();
-    for row in out.as_chunks_mut::<{ WIDTH * 4 }>().0 {
-        row[..EDITION_START * 4].fill(0);
+    let mut out = vec![0u8; WIDTH * HEIGHT * 4];
+    for y in 0..HEIGHT {
+        for x in EDITION_START..WIDTH {
+            let p = pixel(pixels, x, y);
+            out[(y * WIDTH + x - SHIFT) * 4..][..4].copy_from_slice(&p);
+        }
     }
-    draw_glyphs(&mut out, &glyph_faces(), &palette, 0..EDITION_START);
-    let left = t_left();
-    for (x, y) in t_pixels(pixels) {
-        put(&mut out, x + left - T_BODY.0, y, pixel(pixels, x, y));
-    }
+    draw_glyphs(&mut out, &glyph_faces(), &palette, 0..LETTERS_END);
     fill_counters(&mut out, palette.outline);
     soften_edges(&mut out, palette.soft);
     out
@@ -408,16 +348,16 @@ mod tests {
     }
 
     #[test]
-    fn rust_replaces_java_and_edition_is_untouched() {
+    fn cs_replaces_java_and_edition_moves_intact() {
         let source = stand_in();
         let out = compose(&source);
         assert_eq!(out.len(), WIDTH * HEIGHT * 4);
         assert_eq!(
-            columns(&out, EDITION_START..WIDTH),
+            columns(&out, LETTERS_END..WIDTH - SHIFT),
             columns(&source, EDITION_START..WIDTH)
         );
         assert!(!out.as_chunks::<4>().0.contains(&[255, 0, 255, 255]));
-        // R, U and S: their strokes are faces, their notches and counters not.
+        // C and S: their strokes are faces, their notches and counters not.
         let lit = |x: usize, y: usize| lum(pixel(&out, x, y)) >= 100;
         let glyph = |i: usize, x: usize, y: usize| {
             lit(
@@ -425,45 +365,35 @@ mod tests {
                 FACE_TOP + y,
             )
         };
-        for (i, shape) in [R, U, S].into_iter().enumerate() {
+        for (i, shape) in [C, S].into_iter().enumerate() {
             for &[x0, y0, x1, y1] in shape {
                 assert!(glyph(i, (x0 + x1) / 2, (y0 + y1) / 2), "glyph {i}");
             }
         }
-        assert!(!glyph(0, 38, 21), "R's notch between bowl and leg");
-        assert!(!glyph(0, 20, 30), "R's open bottom");
-        assert!(!glyph(1, 20, 5), "U's open top");
-        assert!(!glyph(1, 2, 36), "U's rounded corner");
-        assert!(!glyph(2, 2, 22), "S's lower-left notch");
-        assert!(!glyph(2, 38, 17), "S's upper-right notch");
-        // The T is EDITION's, moved.
-        let shift = T_BODY.0 - t_left();
-        for y in 0..HEIGHT {
-            for x in T_BODY.0..=T_BODY.1 {
-                let p = pixel(&source, x, y);
-                if p[3] == 255 && lum(p) >= 30 {
-                    assert_eq!(pixel(&out, x - shift, y), p, "T at {x},{y}");
-                }
-            }
-        }
+        assert!(!glyph(0, 30, 24), "C's open right side");
+        assert!(!glyph(0, 2, 2), "C's rounded top-left corner");
+        assert!(!glyph(1, 2, 22), "S's lower-left notch");
+        assert!(!glyph(1, 38, 17), "S's upper-right notch");
         assert_soft_rim(&out);
         // Nothing below the 14 GUI rows vanilla draws, and the word gap stays open.
         assert!(out[WIDTH * 55 * 4..].iter().all(|&b| b == 0));
-        let gap = columns(&out, 195..EDITION_START);
+        let gap = columns(&out, 195 - SHIFT..LETTERS_END);
         assert!(gap.as_chunks::<4>().0.iter().all(|p| p[3] == 0));
-        // Centred: "RUST" spans "JAVA"'s columns to within a texel.
+        // Centred: the first and last used columns sit symmetrically in the banner.
         let used = |x: usize| (0..HEIGHT).any(|y| pixel(&out, x, y)[3] > 0);
-        let last = (0..EDITION_START).rev().find(|&x| used(x)).unwrap();
+        let first = (0..WIDTH).find(|&x| used(x)).unwrap();
+        let last = (0..WIDTH).rev().find(|&x| used(x)).unwrap();
         assert!(
-            used(0) && (193..=195).contains(&last),
-            "RUST ends at {last}"
+            (first + last).abs_diff(WIDTH - 1) <= 4,
+            "CS EDITION spans {first}..{last}"
         );
+        assert!(!used(WIDTH - 1) && !used(0));
     }
 
     #[test]
     fn only_vanilla_is_rebuilt() {
         let source = stand_in();
-        assert!(rust_edition(512, 64, &source).is_none());
+        assert!(cs_edition(512, 64, &source).is_none());
     }
 
     /// Against the prepared vanilla resources when they are present.
@@ -476,15 +406,15 @@ mod tests {
         let Ok((w, h, pixels)) = crate::hud::decode(&path) else {
             return;
         };
-        let out = rust_edition(w, h, &pixels).expect("vanilla's edition.png");
+        let out = cs_edition(w, h, &pixels).expect("vanilla's edition.png");
         assert_eq!(
-            columns(&out, EDITION_START..WIDTH),
+            columns(&out, LETTERS_END..WIDTH - SHIFT),
             columns(&pixels, EDITION_START..WIDTH)
         );
         assert_eq!(Palette::sample(&pixels).face, FACE);
         assert_soft_rim(&out);
         let mut edited = pixels.clone();
         edited[3] ^= 1;
-        assert!(rust_edition(w, h, &edited).is_none());
+        assert!(cs_edition(w, h, &edited).is_none());
     }
 }

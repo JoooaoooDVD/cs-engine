@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [lib]
+# CS Engine: the library is libcs_engine.so (CS Launcher Plus loads `cs_engine`; crates/cs-brand LIB).
+name = "cs_engine"
 path = "../horizon-client/src/android_main.rs"
 crate-type = ["cdylib"]
 

@@ -61,3 +61,19 @@ Key tokens are Minecraft key names (`key.keyboard.w`, `key.keyboard.left.shift`,
 - `cs_launch.render_scale` (25–100, 0 = keep `android-launcher.json`) sets the resolution scale per CS profile.
 - `InstallListener.isCancelled()` is polled every second; the installer stops before the next download/stage
   (`official_install::CANCEL_REQUESTED`) and returns the error `Installation cancelled`.
+
+## CS Engine Sprint 1 (Milestone 0 + 1 start)
+
+- `crates/cs-brand`: the single source of the engine's identity (`NAME` "CS Engine", `TAGLINE`
+  "Powered by Craft Studio", `BRAND` "cs-engine", `LIB` "cs_engine", `VERSION` from
+  `CS_ENGINE_VERSION`, `COMMIT` from `CS_ENGINE_COMMIT`). Upstream code keeps its names; only the
+  player-facing hooks read from here.
+- Hooks: title screen version line + tagline (`title.rs`), "CS EDITION" banner
+  (`title_edition.rs`, "EDITION" moved left to stay centred), F3 brand + engine version line
+  (`game/debug_keys.rs`), crash report title/`CS Engine Version`/`Engine Core Version`/saved
+  line (`crash.rs`).
+- Library renamed to `libcs_engine.so` (`crates/horizon-android/Cargo.toml` `[lib] name`).
+  JNI symbols (`Java_com_craftstudio_cslauncher_engine_horizon_HorizonNative_*`) unchanged.
+- CI (`cs-engine.yml`): new `tests` job (host `cargo test` for cs-brand, horizon-core and the
+  render identity tests) gates publish; release assets `libcs_engine-<abi>.so`; `BUILD.json`
+  `engine: "cs-engine"` with `cs_engine_version`.

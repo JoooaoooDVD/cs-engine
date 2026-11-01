@@ -317,7 +317,8 @@ impl Game<'_> {
         }
         // game_version: DebugEntryVersion (the launched version and brand).
         if on("game_version") {
-            d.priority(format!("Minecraft {VERSION_NAME} ({VERSION_NAME}/horizon)"));
+            d.priority(format!("Minecraft {VERSION_NAME} ({VERSION_NAME}/{})", cs_brand::BRAND));
+            d.priority(cs_brand::full_version(horizon_core::release::VERSION));
         }
         // player_position, player_section_position.
         if let Some(p) = self.player.as_ref() {

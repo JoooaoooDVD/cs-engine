@@ -1902,14 +1902,16 @@ impl Title {
                         ];
                     }
                 }
-                let version = format!("Horizon {} (Rust)", horizon_core::VANILLA_VERSION);
+                // CS Engine identity (crates/cs-brand): version line, tagline above it.
+                let version = cs_brand::title_line(horizon_core::VANILLA_VERSION);
                 batch.text(atlas, &version, 2.0, h - 10.0, u32::MAX, true);
+                batch.text(atlas, cs_brand::TAGLINE, 2.0, h - 20.0, 0xFFAAAAAA, true);
                 // A nightly names its build in the top-left corner, the one spot no button reaches at any GUI
                 // scale, so screenshots and reports say which build they come from.
                 if let Some(nightly) = horizon_core::release::nightly_label() {
                     batch.text(atlas, &nightly, 2.0, 2.0, u32::MAX, true);
                 }
-                let notice = "Not affiliated with Mojang or Microsoft";
+                let notice = cs_brand::NOT_AFFILIATED;
                 // TitleScreen.init's `PlainTextButton`: the text's width wide, 10
                 // high at `height - 10`; `extractContents` underlines it while
                 // hovered or focused, and its press opens the credits.

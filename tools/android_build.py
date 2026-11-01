@@ -175,7 +175,7 @@ def main():
     staging = ROOT / '.local/android/gradle-jni' / args.abi
     staging.mkdir(parents=True, exist_ok=True)
     (staging / 'libhorizon_android_native.so').unlink(missing_ok=True)
-    for name in ('libhorizon_android.so',):
+    for name in ('libcs_engine.so',):
         library = target_dir / target / ('debug' if args.profile == 'dev' else args.profile) / name
         if not library.is_file():
             raise FileNotFoundError(library)
