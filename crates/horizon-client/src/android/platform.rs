@@ -475,6 +475,10 @@ pub fn finish() {
 }
 
 pub fn capture_mouse(capture: bool) -> bool {
+    if horizon_client::android_runtime::host_mode() {
+        horizon_client::android_runtime::host_set_grab(capture);
+        return true;
+    }
     if crate::native_ime::capture_mouse(capture) {
         return true;
     }
@@ -508,6 +512,11 @@ pub fn show_multiline(text: &str) {
 }
 fn show_editor(text: &str, multiline: bool) {
     MULTILINE.with(|mode| mode.set(multiline));
+    if horizon_client::android_runtime::host_mode() {
+        // The host launcher shows its own keyboard and types through HostEvent::Text.
+        horizon_client::android_runtime::host_set_keyboard(true);
+        return;
+    }
     if crate::native_ime::show(text) {
         EDIT.with(|e| *e.borrow_mut() = Some(text.into()));
     } else {
@@ -515,6 +524,7 @@ fn show_editor(text: &str, multiline: bool) {
     }
 }
 pub fn hide() {
+    horizon_client::android_runtime::host_set_keyboard(false);
     EDIT.with(|e| *e.borrow_mut() = None);
     crate::native_ime::hide();
 }

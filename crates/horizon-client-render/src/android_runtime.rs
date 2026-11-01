@@ -191,3 +191,70 @@ mod input_tests {
         configure_input(InputMode::Auto);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Host input: a launcher that owns the touch overlay (CS Launcher Plus) feeds
+// the game mouse + keyboard events through this queue instead of the window.
+// The game drains it once per frame (`Game::android_host_input`).
+// ---------------------------------------------------------------------------
+#[derive(Debug, Clone, PartialEq)]
+pub enum HostEvent {
+    /// A key by its `key.keyboard.*` name (or `action:<keybind>`), pressed or released.
+    Key { token: String, down: bool },
+    /// Relative mouse motion in window pixels (camera when the pointer is captured).
+    Look { dx: f64, dy: f64 },
+    /// Absolute pointer position in window pixels (menus, inventory).
+    Cursor { x: f64, y: f64 },
+    /// Mouse button: 0 left, 1 right, 2 middle, 3 back, 4 forward.
+    Button { button: u8, down: bool },
+    /// Wheel lines: positive `y` scrolls up.
+    Scroll { x: f32, y: f32 },
+    /// Typed text (from the host's keyboard) for chat, signs, fields.
+    Text(String),
+    /// Release every key and button the host pressed (focus loss).
+    ReleaseAll,
+}
+static HOST_MODE: AtomicBool = AtomicBool::new(false);
+static HOST_GRAB: AtomicBool = AtomicBool::new(false);
+static HOST_KEYBOARD: AtomicBool = AtomicBool::new(false);
+static HOST_EVENTS: std::sync::Mutex<Vec<HostEvent>> = std::sync::Mutex::new(Vec::new());
+/// The launcher drives input; the engine draws no touch controls and ignores window touches.
+pub fn configure_host(enabled: bool) {
+    HOST_MODE.store(enabled, Ordering::Relaxed);
+}
+pub fn host_mode() -> bool {
+    HOST_MODE.load(Ordering::Relaxed)
+}
+pub fn host_push(event: HostEvent) {
+    let mut events = HOST_EVENTS.lock().unwrap();
+    // Coalesce motion so a slow frame does not replay a long tail of deltas late.
+    match (&event, events.last_mut()) {
+        (HostEvent::Look { dx, dy }, Some(HostEvent::Look { dx: px, dy: py })) => {
+            *px += dx;
+            *py += dy;
+        }
+        (HostEvent::Cursor { .. }, Some(last @ HostEvent::Cursor { .. })) => *last = event,
+        _ => {
+            if events.len() < 4096 {
+                events.push(event);
+            }
+        }
+    }
+}
+pub fn host_take() -> Vec<HostEvent> {
+    std::mem::take(&mut *HOST_EVENTS.lock().unwrap())
+}
+/// Game wants the pointer captured (world view) rather than a visible cursor (menus).
+pub fn host_set_grab(grabbed: bool) {
+    HOST_GRAB.store(grabbed, Ordering::Relaxed);
+}
+pub fn host_grab() -> bool {
+    HOST_GRAB.load(Ordering::Relaxed)
+}
+/// Game asked for a text editor (chat, sign, field): the host shows its keyboard.
+pub fn host_set_keyboard(wanted: bool) {
+    HOST_KEYBOARD.store(wanted, Ordering::Relaxed);
+}
+pub fn host_keyboard() -> bool {
+    HOST_KEYBOARD.load(Ordering::Relaxed)
+}

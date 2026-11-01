@@ -63,6 +63,9 @@ pub struct Launch {
     pub renderer: String,
     /// Extra `horizon-client` options (`--render-distance 8`, `--quickPlaySingleplayer World`).
     pub extra_arguments: Vec<String>,
+    /// CS Launcher's own touch controls drive the game (`HorizonNative.nativeHost*`); the
+    /// engine draws no touch overlay and ignores window touches.
+    pub host_input: bool,
 }
 
 impl Launch {
@@ -235,7 +238,13 @@ pub fn run(app: AndroidApp, launch: Launch) {
             log::warn!("Previous Vulkan startup was interrupted; using OpenGL ES");
         }
         let renderer = launch.renderer(config.renderer);
-        crate::configure_input_mode(config.input_host);
+        if launch.host_input {
+            // Mouse + keyboard semantics: cursor in menus, captured look in the world.
+            crate::configure_input_mode(crate::catalog::InputHost::KeyboardMouse);
+            horizon_client::android_runtime::configure_host(true);
+        } else {
+            crate::configure_input_mode(config.input_host);
+        }
         crate::device_runtime::configure(config.device);
         crate::platform::set_orientation(config.orientation);
         crate::native_ime::configure_screen(config.screen.immersive, config.screen.avoid_cutout);
@@ -513,4 +522,103 @@ pub extern "system" fn Java_com_craftstudio_cslauncher_engine_horizon_HorizonNat
     }
     let summary = crate::diagnostics::summary(&home);
     jstring_result(&mut env, (!summary.is_empty()).then_some(summary))
+}
+
+// ---------------------------------------------------------------------------
+// Host input natives (CS control system -> engine). Cheap: they only queue.
+// ---------------------------------------------------------------------------
+use horizon_client::android_runtime::{host_push, HostEvent};
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_craftstudio_cslauncher_engine_horizon_HorizonNative_nativeHostKey<'l>(
+    mut env: JNIEnv<'l>,
+    _class: JClass<'l>,
+    token: JString<'l>,
+    down: jboolean,
+) {
+    let token = jstring_arg(&mut env, &token);
+    if !token.is_empty() {
+        host_push(HostEvent::Key { token, down: down != 0 });
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_craftstudio_cslauncher_engine_horizon_HorizonNative_nativeHostLook<'l>(
+    _env: JNIEnv<'l>,
+    _class: JClass<'l>,
+    dx: jni::sys::jdouble,
+    dy: jni::sys::jdouble,
+) {
+    if dx != 0.0 || dy != 0.0 {
+        host_push(HostEvent::Look { dx, dy });
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_craftstudio_cslauncher_engine_horizon_HorizonNative_nativeHostCursor<'l>(
+    _env: JNIEnv<'l>,
+    _class: JClass<'l>,
+    x: jni::sys::jdouble,
+    y: jni::sys::jdouble,
+) {
+    host_push(HostEvent::Cursor { x, y });
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_craftstudio_cslauncher_engine_horizon_HorizonNative_nativeHostButton<'l>(
+    _env: JNIEnv<'l>,
+    _class: JClass<'l>,
+    button: jni::sys::jint,
+    down: jboolean,
+) {
+    host_push(HostEvent::Button {
+        button: button.clamp(0, 255) as u8,
+        down: down != 0,
+    });
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_craftstudio_cslauncher_engine_horizon_HorizonNative_nativeHostScroll<'l>(
+    _env: JNIEnv<'l>,
+    _class: JClass<'l>,
+    x: jni::sys::jfloat,
+    y: jni::sys::jfloat,
+) {
+    host_push(HostEvent::Scroll { x, y });
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_craftstudio_cslauncher_engine_horizon_HorizonNative_nativeHostText<'l>(
+    mut env: JNIEnv<'l>,
+    _class: JClass<'l>,
+    text: JString<'l>,
+) {
+    let text = jstring_arg(&mut env, &text);
+    if !text.is_empty() {
+        host_push(HostEvent::Text(text));
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_craftstudio_cslauncher_engine_horizon_HorizonNative_nativeHostReleaseAll<'l>(
+    _env: JNIEnv<'l>,
+    _class: JClass<'l>,
+) {
+    host_push(HostEvent::ReleaseAll);
+}
+
+/// Bit 0: the game wants the pointer captured (world view); bit 1: it asked for a text keyboard.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_craftstudio_cslauncher_engine_horizon_HorizonNative_nativeHostPoll<'l>(
+    _env: JNIEnv<'l>,
+    _class: JClass<'l>,
+) -> jni::sys::jint {
+    let mut flags = 0;
+    if horizon_client::android_runtime::host_grab() {
+        flags |= 1;
+    }
+    if horizon_client::android_runtime::host_keyboard() {
+        flags |= 2;
+    }
+    flags
 }

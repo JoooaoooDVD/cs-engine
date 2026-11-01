@@ -134,6 +134,8 @@ pub struct TouchControls {
     fingers: BTreeMap<u64, (Role, [f32; 2])>,
     custom_fingers: BTreeMap<u64, String>,
     custom_events: Vec<(String, bool)>,
+    /// Keys the host launcher holds (`android_runtime::HostEvent::Key`).
+    host_held: std::collections::BTreeSet<String>,
     pending: PadState,
     pub aim: Option<[f32; 2]>,
     tap_aim: Option<[f32; 2]>,

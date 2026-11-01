@@ -465,6 +465,105 @@ impl Game<'_> {
             crate::platform::show(&initial);
         }
     }
+    /// Input from the host launcher (CS Launcher Plus): its own touch controls,
+    /// keyboard and virtual mouse arrive as `HostEvent`s, once per frame.
+    pub(crate) fn android_host_input(&mut self, event_loop: &ActiveEventLoop) {
+        use horizon_client::android_runtime::{self as runtime, HostEvent};
+        if !runtime::host_mode() {
+            return;
+        }
+        let events = runtime::host_take();
+        if events.is_empty() {
+            return;
+        }
+        let Some(id) = self.window.as_ref().map(|w| w.id()) else {
+            return;
+        };
+        self.last_input = Instant::now();
+        let device_id = DeviceId::dummy();
+        for event in events {
+            match event {
+                HostEvent::Key { token, down } => {
+                    self.pad.touch.host_key(&token, down);
+                    self.android_custom_events();
+                }
+                HostEvent::ReleaseAll => {
+                    self.pad.touch.host_release_all();
+                    self.android_custom_events();
+                    for button in [MouseButton::Left, MouseButton::Right, MouseButton::Middle] {
+                        self.window_event(
+                            event_loop,
+                            id,
+                            WindowEvent::MouseInput {
+                                device_id,
+                                state: ElementState::Released,
+                                button,
+                            },
+                        );
+                    }
+                }
+                HostEvent::Look { dx, dy } => {
+                    if self.captured
+                        && self.focused
+                        && self.pending_save.is_none()
+                        && self.screen == Screen::Playing
+                    {
+                        self.mouse.on_move(0.0, 0.0, dx, dy, true, true);
+                    }
+                }
+                HostEvent::Cursor { x, y } => {
+                    self.window_event(
+                        event_loop,
+                        id,
+                        WindowEvent::CursorMoved {
+                            device_id,
+                            position: winit::dpi::PhysicalPosition::new(x, y),
+                        },
+                    );
+                }
+                HostEvent::Button { button, down } => {
+                    let button = match button {
+                        0 => MouseButton::Left,
+                        1 => MouseButton::Right,
+                        2 => MouseButton::Middle,
+                        3 => MouseButton::Back,
+                        4 => MouseButton::Forward,
+                        other => MouseButton::Other(u16::from(other)),
+                    };
+                    self.window_event(
+                        event_loop,
+                        id,
+                        WindowEvent::MouseInput {
+                            device_id,
+                            state: if down {
+                                ElementState::Pressed
+                            } else {
+                                ElementState::Released
+                            },
+                            button,
+                        },
+                    );
+                }
+                HostEvent::Scroll { x, y } => {
+                    self.window_event(
+                        event_loop,
+                        id,
+                        WindowEvent::MouseWheel {
+                            device_id,
+                            delta: MouseScrollDelta::LineDelta(x, y),
+                            phase: TouchPhase::Moved,
+                        },
+                    );
+                }
+                HostEvent::Text(text) => {
+                    if !text.is_empty() {
+                        self.pad_osk_output(Output::Text(text));
+                    }
+                }
+            }
+        }
+    }
+
     pub(super) fn android_poll_keyboard(&mut self) {
         self.android_custom_events();
         if let Some(notice) = crate::documents::poll() {

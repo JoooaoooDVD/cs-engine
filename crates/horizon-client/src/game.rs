@@ -15127,6 +15127,12 @@ impl ApplicationHandler for Game<'_> {
             return;
         }
         #[cfg(target_os = "android")]
+        if horizon_client::android_runtime::host_mode()
+            && matches!(event, WindowEvent::Touch(_))
+        {
+            return;
+        }
+        #[cfg(target_os = "android")]
         if let WindowEvent::Touch(touch) = &event {
             use winit::event::TouchPhase;
             self.last_input = Instant::now();
@@ -16508,6 +16514,8 @@ impl ApplicationHandler for Game<'_> {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         #[cfg(target_os = "android")]
         self.android_apply_display_scale();
+        #[cfg(target_os = "android")]
+        self.android_host_input(event_loop);
         #[cfg(target_os = "android")]
         self.android_poll_keyboard();
         #[cfg(target_os = "android")]

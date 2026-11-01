@@ -143,7 +143,26 @@ impl TouchControls {
         false
     }
     pub fn held_custom_tokens(&self) -> impl Iterator<Item = &str> {
-        self.custom_fingers.values().map(String::as_str)
+        self.custom_fingers
+            .values()
+            .map(String::as_str)
+            .chain(self.host_held.iter().map(String::as_str))
+    }
+    /// A key from the host launcher's own controls, by `key.keyboard.*` or `action:*` token.
+    /// Repeated presses are ignored; the release is queued only for a held key.
+    pub fn host_key(&mut self, token: &str, down: bool) {
+        if down {
+            if self.host_held.insert(token.to_string()) {
+                self.custom_events.push((token.to_string(), true));
+            }
+        } else if self.host_held.remove(token) {
+            self.custom_events.push((token.to_string(), false));
+        }
+    }
+    /// Release everything the host holds (window focus lost, overlay hidden).
+    pub fn host_release_all(&mut self) {
+        let keys: Vec<String> = std::mem::take(&mut self.host_held).into_iter().collect();
+        self.custom_events.extend(keys.into_iter().map(|k| (k, false)));
     }
     pub fn key_events(&mut self) -> Vec<(String, bool)> {
         std::mem::take(&mut self.custom_events)
