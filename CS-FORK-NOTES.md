@@ -48,3 +48,15 @@ once per frame by `Game::android_host_input`:
 | `nativeHostPoll()` | — | bit 0 pointer captured, bit 1 keyboard wanted |
 
 Key tokens are Minecraft key names (`key.keyboard.w`, `key.keyboard.left.shift`, …).
+
+## Install progress contract (cs-host)
+
+- `InstallListener.onProgress(stage, done, total)` is called for every stage change / progress step **and at least once per
+  second as a heartbeat** while the installer is alive (same stage/values repeated). A host that sees no callback for
+  more than ~30 s may assume the `:horizon` process died.
+- Stage order: `Checking Minecraft version` → `Downloading game resources and sound` (bytes) → `Unpacking verified files`
+  (files) → `Preparing worlds and registries` (indeterminate) → `Downloading touch controls` (files) →
+  `Finishing installation` (indeterminate). `nativeInstall` returns `null` only after the prepared resources passed
+  `ready()`; the host must still treat `nativeReady(home) == true` as the only "installed" signal.
+- `InstallListener.isCancelled()` is polled every second; the installer stops before the next download/stage
+  (`official_install::CANCEL_REQUESTED`) and returns the error `Installation cancelled`.

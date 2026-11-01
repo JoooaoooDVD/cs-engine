@@ -19,6 +19,16 @@ mod cache_input;
 const CATALOG: &str = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
 const LOCK: &str = include_str!("../../../research-lock.json");
 static INSTALLATION: Mutex<()> = Mutex::new(());
+/// Cooperative cancellation for host launchers (CS Launcher Plus): set from another thread,
+/// checked before every download and between stages. Cleared when a new installation starts.
+pub static CANCEL_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn check_cancel() -> Result<()> {
+    if CANCEL_REQUESTED.load(Ordering::Relaxed) {
+        return Err("Installation cancelled".into());
+    }
+    Ok(())
+}
 static DOWNLOAD_CACHE_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 /// Android supplies Context.getCacheDir(), keeping temporary downloads out of files/.
@@ -341,6 +351,7 @@ fn validate_manifest(bytes: &[u8], checksum: &str, version: &str, pins: &Value) 
 }
 
 pub fn install_with_progress(home: &Path, progress: impl Fn(InstallProgress) + Sync) -> Result<()> {
+    CANCEL_REQUESTED.store(false, Ordering::Relaxed);
     let _guard = INSTALLATION.lock().unwrap_or_else(|e| e.into_inner());
     let report = |stage, done, total| progress(InstallProgress { stage, done, total });
     report(InstallStage::Metadata, 0, 0);
@@ -421,7 +432,7 @@ pub fn install_with_progress(home: &Path, progress: impl Fn(InstallProgress) + S
                     }
                     let i = next.fetch_add(1, Ordering::Relaxed);
                     let Some(file) = files.get(i) else { break };
-                    if let Err(e) = file.get() {
+                    if let Err(e) = check_cancel().and_then(|()| file.get()) {
                         *error.lock().unwrap() = Some(e.to_string());
                         break;
                     }
@@ -445,9 +456,17 @@ pub fn install_with_progress(home: &Path, progress: impl Fn(InstallProgress) + S
     }
     fs::create_dir(&stage)?;
     let result = (|| -> Result<()> {
-        report(InstallStage::Extract, 0, 0);
+        check_cancel()?;
         let mut zip = zip::ZipArchive::new(files[0].open()?)?;
+        let extract_total = zip.len() as u64 + assets.len() as u64 + 1;
+        let mut extracted = 0u64;
+        report(InstallStage::Extract, 0, extract_total);
         for i in 0..zip.len() {
+            extracted += 1;
+            if extracted % 128 == 0 {
+                check_cancel()?;
+                report(InstallStage::Extract, extracted, extract_total);
+            }
             let mut entry = zip.by_index(i)?;
             let name = entry.name()?;
             if !(name.starts_with("assets/") || name.starts_with("data/")) || entry.is_dir() {
@@ -466,6 +485,11 @@ pub fn install_with_progress(home: &Path, progress: impl Fn(InstallProgress) + S
             .map(|file| (file.path.as_path(), file))
             .collect();
         for (name, from) in assets {
+            extracted += 1;
+            if extracted % 64 == 0 {
+                check_cancel()?;
+                report(InstallStage::Extract, extracted, extract_total);
+            }
             let path = stage.join("assets").join(relative(name)?);
             fs::create_dir_all(path.parent().ok_or("Missing asset parent")?)?;
             let input = downloads
@@ -477,8 +501,11 @@ pub fn install_with_progress(home: &Path, progress: impl Fn(InstallProgress) + S
                 .map_err(|error| format!("Could not prepare Minecraft asset {name}: {error}"))?;
         }
         crate::resource_install::extract(&home.join("engine-data.zip"), &stage)?;
+        report(InstallStage::Extract, extract_total, extract_total);
+        check_cancel()?;
         report(InstallStage::WorldData, 0, 0);
         crate::android_resources::rebuild(&stage)?;
+        check_cancel()?;
         report(InstallStage::Controls, 0, 0);
         crate::android_resources::controls_with_progress(&stage, |done, total| {
             report(InstallStage::Controls, done, total)
@@ -514,6 +541,9 @@ pub fn install_with_progress(home: &Path, progress: impl Fn(InstallProgress) + S
         }
         if backup.exists() {
             let _ = fs::remove_dir_all(&backup);
+        }
+        if !ready(home) {
+            return Err("Prepared Minecraft resources failed the final verification".into());
         }
         Ok(())
     })();

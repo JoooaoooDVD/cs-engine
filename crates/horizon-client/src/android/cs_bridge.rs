@@ -388,8 +388,8 @@ fn jstring_result(env: &mut JNIEnv<'_>, text: Option<String>) -> jstring {
 
 /// `String nativeInstall(String home, String cache, String engineData, InstallListener listener)`
 /// Returns `null` on success, otherwise the error text. `listener.onProgress(String stage, long done, long total)`
-/// is called on this thread; `listener.isCancelled()` is polled between stages (a running download finishes
-/// its current file first).
+/// is called on this thread (at least once a second while the installer is alive); `listener.isCancelled()` is
+/// polled every second and stops the installer before the next download or stage.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_craftstudio_cslauncher_engine_horizon_HorizonNative_nativeInstall<'l>(
     mut env: JNIEnv<'l>,
@@ -439,9 +439,32 @@ pub extern "system" fn Java_com_craftstudio_cslauncher_engine_horizon_HorizonNat
 
     let mut last = (String::new(), 0u64, 0u64);
     let mut outcome: Result<(), String> = Ok(());
-    for message in receiver {
-        match message {
-            Message::Progress(update) => {
+    let report_to_java = |env: &mut JNIEnv<'l>, stage: &str, done: u64, total: u64| {
+        if listener.is_null() {
+            return;
+        }
+        let _ = env.with_local_frame(8, |env| -> jni::errors::Result<()> {
+            let text = env.new_string(stage)?;
+            env.call_method(
+                &listener,
+                "onProgress",
+                "(Ljava/lang/String;JJ)V",
+                &[
+                    JValue::Object(&text),
+                    JValue::Long(done as i64),
+                    JValue::Long(total as i64),
+                ],
+            )?;
+            Ok(())
+        });
+        if env.exception_check().unwrap_or(false) {
+            let _ = env.exception_clear();
+        }
+    };
+    let mut last_java_update = std::time::Instant::now();
+    loop {
+        match receiver.recv_timeout(std::time::Duration::from_millis(1000)) {
+            Ok(Message::Progress(update)) => {
                 let stage = update.stage.label().to_string();
                 let same_stage = stage == last.0;
                 let done = if same_stage { update.done.max(last.1) } else { update.done };
@@ -449,28 +472,36 @@ pub extern "system" fn Java_com_craftstudio_cslauncher_engine_horizon_HorizonNat
                     continue;
                 }
                 last = (stage.clone(), done, update.total);
+                last_java_update = std::time::Instant::now();
+                report_to_java(&mut env, &stage, done, update.total);
+            }
+            Ok(Message::Done(result)) => {
+                outcome = result;
+                break;
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // Heartbeat: long silent stages (unpacking, world data) still prove the installer is alive,
+                // and the host gets a chance to cancel.
                 if !listener.is_null() {
-                    let _ = env.with_local_frame(8, |env| -> jni::errors::Result<()> {
-                        let text = env.new_string(&stage)?;
-                        env.call_method(
-                            &listener,
-                            "onProgress",
-                            "(Ljava/lang/String;JJ)V",
-                            &[
-                                JValue::Object(&text),
-                                JValue::Long(done as i64),
-                                JValue::Long(update.total as i64),
-                            ],
-                        )?;
-                        Ok(())
-                    });
+                    let cancelled = env
+                        .call_method(&listener, "isCancelled", "()Z", &[])
+                        .and_then(|v| v.z())
+                        .unwrap_or(false);
                     if env.exception_check().unwrap_or(false) {
                         let _ = env.exception_clear();
                     }
+                    if cancelled {
+                        horizon_client::official_install::CANCEL_REQUESTED
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+                if last_java_update.elapsed() >= std::time::Duration::from_millis(1000) && !last.0.is_empty() {
+                    last_java_update = std::time::Instant::now();
+                    report_to_java(&mut env, &last.0, last.1, last.2);
                 }
             }
-            Message::Done(result) => {
-                outcome = result;
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                outcome = Err("Installer thread stopped unexpectedly".into());
                 break;
             }
         }
