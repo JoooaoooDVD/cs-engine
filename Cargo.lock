@@ -1419,6 +1419,7 @@ dependencies = [
 name = "horizon-android"
 version = "0.1.0"
 dependencies = [
+ "cs-brand",
  "ab_glyph",
  "android_logger",
  "bytemuck",

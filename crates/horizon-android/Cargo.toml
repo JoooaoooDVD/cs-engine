@@ -27,6 +27,7 @@ sha1 = "0.10"
 ureq = { version = "2", default-features = false, features = ["json", "tls"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 horizon-core = { path = "../horizon-core" }
+cs-brand = { path = "../cs-brand" }
 horizon-items = { path = "../horizon-items" }
 # The server thread ahead of the workers (MinecraftServer.spin's Thread.setPriority).
 horizon-threads = { path = "../horizon-threads" }
