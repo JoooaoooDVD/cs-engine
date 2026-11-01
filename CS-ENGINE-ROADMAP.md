@@ -275,3 +275,18 @@ in the control-button editor, (3) touch across devices (diagnostics from Round 7
    button again → touch. 2. Edit controls → tap a button → editor opens (no crash) and the switches
    work. 3. Menu → Account · Skin & Cape → import a PNG → Apply → press F5 (third person): new skin
    immediately; restart game → still there. 4. Microsoft account: official skin unchanged.
+
+### Round 72b — Virtual mouse root cause: cursor teleported to the finger
+* Root cause (launcher): `InGUIEventProcessor` only switches to touchpad semantics when it knows the
+  cursor view (`setAbstractTouchpad`), and that was wired in `GameView.start()` — which only the Java
+  engine calls (it creates the render surface). CS Engine never called it, so `touchpadDisplayed()`
+  was always false and every touch was sent as an absolute cursor position. Fixed in
+  `GameView.onFinishInflate()` (both engines, identical behaviour for Java).
+* New `input/mouse/VirtualTouchpad` (pure Java, unit-tested): relative deltas only, finger lift keeps
+  the cursor, quick still tap = left click at the cursor, quick still two-finger tap = right click,
+  two moving fingers = scroll, finger-count changes re-anchor without motion, cancel emits nothing.
+  `InGUIEventProcessor` routes all touchpad-mode events through it; the non-touchpad path is unchanged.
+* Mouse on keeps the last cursor position (centred only when unset/off-screen).
+* CI: `testFullDebugUnitTest --tests input.mouse.*` runs before the APK build (7 tests).
+* Also available while the mouse is on: PRI/SEC/scroll control buttons act at the cursor; chat/
+  keyboard never toggles mouse mode (keyboard flag only opens the IME).
