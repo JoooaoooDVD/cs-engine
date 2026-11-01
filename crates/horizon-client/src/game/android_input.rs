@@ -513,6 +513,33 @@ impl Game<'_> {
                         }
                         continue;
                     }
+                    // Chat editing keys (Tab completion, history arrows, caret keys) go to the
+                    // chat screen like a typed key would; the modifier state they read is kept.
+                    if self.screen == Screen::Chat
+                        && self.title.is_none()
+                        && let Some(key) = horizon_client::keybinds::key_code(&token)
+                        && matches!(
+                            key,
+                            KeyCode::Tab
+                                | KeyCode::ArrowUp
+                                | KeyCode::ArrowDown
+                                | KeyCode::ArrowLeft
+                                | KeyCode::ArrowRight
+                                | KeyCode::Home
+                                | KeyCode::End
+                                | KeyCode::Delete
+                                | KeyCode::PageUp
+                                | KeyCode::PageDown
+                        )
+                    {
+                        if down {
+                            self.keys.insert(key);
+                            self.chat_key_code(key, None);
+                        } else {
+                            self.keys.remove(&key);
+                        }
+                        continue;
+                    }
                     self.pad.touch.host_key(&token, down);
                     self.android_custom_events();
                 }
