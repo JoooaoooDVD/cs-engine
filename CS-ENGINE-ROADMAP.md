@@ -177,3 +177,45 @@ Manifest `android.app.lib_name=cs_engine`, `HorizonNative.LIBRARY`, fetch script
 6. Further CS Engine features (C, D, E)
 
 Rules: preserve working features; no unnecessary rewrites; keep CSL2 ↔ engine compatible; never break profiles; keep licence notices; GitHub Actions only; tests before publish; device-specific bugs are not "fixed" on CI green; lightweight ARM64 focus.
+
+---
+
+## Round 71 — Expanded feature plan (CS Engine as a complete Android gaming engine)
+
+Inspection first: what already exists and will be **reused, not duplicated**.
+
+| Area | Already in the engine fork | Already in CS Launcher Plus | Gap CS Engine fills |
+|---|---|---|---|
+| Skins & capes | `skins.rs` (1367 l.): MSA profile textures (signed), legacy 64×32 → 64×64 (`process_legacy_skin`), cape layout 64×32 / 22×17 (`process_cape`), **offline skin/cape via `HORIZON_OFFLINE_SKIN`, `HORIZON_OFFLINE_SKIN_MODEL`, `HORIZON_OFFLINE_CAPE`** (read once at start); `modelPart_cape` option (vanilla cape visibility) | `skins/` package (2554 l.): `SkinLibrary` slots, `LocalSkinStore` (skins + **capes**, selection per account), `PlayerPreviewView` 3D 360°, `SkinEditorFragment`, `MinecraftSkinApi` (official upload/model change for MSA), `PremiumProfileLookup` | Hand the CS selection to the engine per launch; hot-switch without restart; per-profile cape; in-engine Skin & Cape page using the same store |
+| Touch / controls | `touch.rs` (1784 l.) Horizon touch UI (unused in host mode), `device_gyro.rs`, `android_gamepad.rs`, `host_key/action:*` tokens | CS Control System (`ControlLayout`, editor, profiles, opacity/size, `GameView` touchpad, gamepad) | Gyro → host look, per-profile control files (already `cs_controls`), sensitivity/cursor speed settings surfaced in the CS drawer |
+| Graphics / settings | `options_ui.rs`, `settings.rs`, `catalog.rs` (704 settings), `display.rs` render scale (25–100), `performance.rs`, `perf_overlay.rs`, `frame_scale.rs` (dynamic), `shader_catalog.rs` | Profile JSON (`horizonRenderScale`, renderer), `cs_launch` extras | Presets (Potato/Low/Balanced/High), FPS limiter, VSync, entity/particle/mipmap/texture controls, GPU compatibility profiles, low-end mode — as `cs_launch`→engine config, saved per profile |
+| Packs / shaders | `packs.rs`, `pack_screen.rs` (vanilla pack screen), `shader_pack_list.rs`, `documents.rs` (Android document import) | Resource browser (Modrinth/CurseForge), per-profile folders | ZIP import from the CS drawer, compatibility detection (pack_format vs 26.3), priority ordering UI, shader config page |
+| Worlds | `horizon-world` (174k l.), world select/create screens, `datapack.rs` | File manager, profile folders | Rename/icon/backup/restore/export/import/datapacks from the drawer; delete confirmation; quick switch |
+| Performance | `performance.rs` (record_performance traces), `perf_overlay.rs`, F3 | Play-time page, device info | Performance Center page + history + automatic device profile recommendation |
+| Screenshots | `gallery.rs` (MediaStore export), F2 screenshots | — | Gallery page, custom location, recording via Android `MediaProjection`/`MediaRecorder` in the launcher process (engine-side encode only if measurable) |
+| Stability | `crash.rs`, `exit_reports.rs`, `diagnostics.rs`, `native_tombstone.rs`, Round 70 input diagnostics | Advanced Crash Auto Fix (Round 39), exit reports | GPU compatibility detection → safe graphics mode, recovery after failed launches, profile backup |
+
+### Feature backlog (added to the roadmap, in the user's priority order)
+
+1. **Touch & mouse compatibility** — Round 70 fixes shipped; device confirmation + diagnostics triage. *(gate for everything below)*
+2. **Skin & Cape Management System (high priority)**
+   - Skins: PNG import, 64×64 + legacy 64×32, Steve/Alex, 3D 360° preview, multiple slots, switch without reinstall, management inside CS Engine, CS account skin sync.
+   - Capes: import, apply, 3D preview, slots, enable/disable, visibility, per-profile cape.
+   - Accounts: MSA skin sync (official `MinecraftSkinApi` upload only — never bypass auth/ownership), premium skin fetch, offline/local custom skins, persistence across restarts.
+   - Plan: **Sprint 2a** — `cs_launch` gains `skin{path,model}` + `cape{path}` from `LocalSkinStore`; engine `cs_bridge` maps them to the existing offline-skin/cape loaders for offline accounts and to a *local override* for MSA accounts (own player render + cape toggle), keeping server-side identity untouched. **Sprint 2b** — hot reload (`HostEvent::Skin`) and the in-engine Skin & Cape page (CS design) backed by the launcher store via a small JNI bridge. Tests: skin/cape decode + layout, launch JSON round-trip, override precedence.
+3. **Advanced Controls** — custom layout editor (existing CS editor in engine host), button position/size/opacity, mouse sensitivity, virtual mouse mode, gyroscope (engine `device_gyro` → host look deltas), gamepad, custom key mapping (`HorizonKeyMap` + `action:*`), quick switching, per-profile configs.
+4. **CS Engine Settings** — FPS limiter, VSync, resolution scaling, dynamic resolution, presets, low-end mode, render/simulation distance, graphics quality, particles, shadows, clouds, performance monitor, memory info; per-profile persistence.
+5. **Performance Center** — FPS, frame time, RAM, CPU/GPU where available, render distance, chunk loading, temperature (thermal API where accessible), history, automatic device profile recommendation (GPU/RAM/SoC → preset).
+6. **Resource Pack & Shader Manager** — in-game manager, ZIP import, enable/disable, preview/info, compatibility detection, shader import/config, priority.
+7. **World Management** — list improvements, rename, icon, backup/restore, export/import, datapacks, info, delete confirmation, quick switching.
+8. **CS Engine In-Game Drawer** — Skin & Cape, Controls, Mouse, Performance Center, Graphics, Resource Packs, Shader Packs, Screenshot Gallery, World Management, Engine Settings, Report a Problem. Mobile-first, CS Launcher Plus design. (Replaces the Round 65 minimal menu; built in the launcher overlay process so it shares the CS design system and never blocks the render thread.)
+9. **Screenshot & Recording** — screenshots, gallery, custom location, recording where supported (MediaProjection), quality settings, FPS-impact indicator.
+10. **Additional customisation** — HUD editor, hotbar, crosshair editor, FOV, HUD scaling, FPS counter style, coordinates/direction, custom performance overlay, toggleable CS watermark.
+11. **Stability & compatibility (continuous)** — automatic crash collection, better diagnostics, GPU compatibility detection, device-specific config, safe graphics mode, recovery after failed launches, input diagnostics, profile backup/recovery.
+12. **Advanced graphics (with 4)** — presets Potato/Low/Balanced/High, dynamic resolution, render-distance presets, entity distance, particles, texture quality, mipmaps, VSync, FPS limiter, GPU profiles, low-end mode.
+
+### Per-feature rules (standing)
+Inspect existing architecture → reuse → no duplicate implementations → low memory/CPU overhead → existing profiles and installs untouched → automated tests (host `cargo test` job + CSL2 JUnit) → GitHub Actions build → verified on real Android devices before "done".
+
+### Next sprint
+**Sprint 2a — Skin & Cape bridge** (after device confirmation of Round 70): launcher `LocalSkinStore` → `cs_launch` → engine render of own skin/cape for offline and MSA accounts, cape toggle, persistence; tests; CI; device test (Steve/Alex, legacy skin, cape on/off, switch skin between launches).
