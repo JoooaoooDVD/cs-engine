@@ -58,5 +58,6 @@ Key tokens are Minecraft key names (`key.keyboard.w`, `key.keyboard.left.shift`,
   (files) → `Preparing worlds and registries` (indeterminate) → `Downloading touch controls` (files) →
   `Finishing installation` (indeterminate). `nativeInstall` returns `null` only after the prepared resources passed
   `ready()`; the host must still treat `nativeReady(home) == true` as the only "installed" signal.
+- `cs_launch.render_scale` (25–100, 0 = keep `android-launcher.json`) sets the resolution scale per CS profile.
 - `InstallListener.isCancelled()` is polled every second; the installer stops before the next download/stage
   (`official_install::CANCEL_REQUESTED`) and returns the error `Installation cancelled`.

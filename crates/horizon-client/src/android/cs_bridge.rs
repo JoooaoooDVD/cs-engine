@@ -66,6 +66,8 @@ pub struct Launch {
     /// CS Launcher's own touch controls drive the game (`HorizonNative.nativeHost*`); the
     /// engine draws no touch overlay and ignores window touches.
     pub host_input: bool,
+    /// Resolution scale in percent (25–100); 0 keeps the value of `android-launcher.json`.
+    pub render_scale: u32,
 }
 
 impl Launch {
@@ -248,6 +250,9 @@ pub fn run(app: AndroidApp, launch: Launch) {
         crate::device_runtime::configure(config.device);
         crate::platform::set_orientation(config.orientation);
         crate::native_ime::configure_screen(config.screen.immersive, config.screen.avoid_cutout);
+        if launch.render_scale > 0 {
+            config.render_scale = crate::display::RenderScale::new(launch.render_scale);
+        }
         crate::display::set_scale(config.render_scale);
         horizon_client::android_resources::repair_structure_transforms(
             &home.join("engine-data.zip"),
