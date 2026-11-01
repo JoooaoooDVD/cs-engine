@@ -290,3 +290,16 @@ in the control-button editor, (3) touch across devices (diagnostics from Round 7
 * CI: `testFullDebugUnitTest --tests input.mouse.*` runs before the APK build (7 tests).
 * Also available while the mouse is on: PRI/SEC/scroll control buttons act at the cursor; chat/
   keyboard never toggles mouse mode (keyboard flag only opens the IME).
+
+### Round 72c — Keyboard Enter fix (engine) + mouse Sprint A (launcher)
+* **Enter/Backspace from the Android keyboard did nothing in chat/commands.** Root cause (engine):
+  host keys arrive as custom-key tokens → `mapped_key`/`key_pressed`, which only reach key mappings;
+  the chat/sign/book/search fields read `WindowEvent::KeyboardInput` (not constructible from the host)
+  or the on-screen keyboard route. Fix (`android_input.rs`, fork 0d738af61): while a text field has
+  focus (`pad_typing()` or a focused title-screen field), host Enter/Backspace take the OSK route
+  (`pad_osk_output`), and an IME that commits Enter as `\n` in the text is treated as Enter. All
+  other keys unchanged.
+* Launcher: auto cursor in menus (engine releases pointer and does not ask for the keyboard → cursor
+  shows; world/typing → hides; independent of the manual Mouse button; preference
+  `vmouse_auto_menus`), double-tap-and-hold drag, options tap-to-click / two-finger right click / drag,
+  in-game "Mouse & touch settings" (cursor speed, size, the toggles — live + persisted). 9 unit tests.
