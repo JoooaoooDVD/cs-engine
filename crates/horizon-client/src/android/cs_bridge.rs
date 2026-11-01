@@ -166,11 +166,19 @@ fn stage_engine_data(source: &str, home: &Path) -> std::io::Result<()> {
 }
 
 fn write_exit(home: &Path, error: Option<&str>) {
+    let (pushed, processed) = horizon_client::android_runtime::host_stats();
+    let geometry = horizon_client::android_runtime::host_geometry().map(|g| {
+        serde_json::json!({
+            "window": g.window, "render": g.render, "origin": g.origin, "scale": g.scale,
+        })
+    });
     let body = serde_json::json!({
         "ok": error.is_none(),
         "error": error,
         "engine": crate::backend::VERSION,
+        "cs_engine": cs_brand::full_version(crate::backend::VERSION),
         "minecraft": horizon_core::VANILLA_VERSION,
+        "host_input": {"pushed": pushed, "processed": processed, "geometry": geometry},
     });
     let _ = std::fs::write(home.join(EXIT_FILE), body.to_string());
 }

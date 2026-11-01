@@ -480,6 +480,8 @@ impl Game<'_> {
             return;
         };
         self.last_input = Instant::now();
+        runtime::host_note_processed(events.len());
+        let geometry = self.host_geometry();
         let device_id = DeviceId::dummy();
         for event in events {
             match event {
@@ -512,6 +514,12 @@ impl Game<'_> {
                     }
                 }
                 HostEvent::Cursor { x, y } => {
+                    // The host measures in overlay-window pixels; the game's cursor lives in
+                    // render-target pixels (render scale, safe insets, aspect letterbox) — the
+                    // same mapping winit applies to the window's own touches
+                    // (`native_pointer_position`). Without it every tap lands short of its
+                    // button as soon as the render scale is below 100%.
+                    let (x, y) = Self::host_map_pointer(geometry, x, y);
                     self.window_event(
                         event_loop,
                         id,
@@ -562,6 +570,53 @@ impl Game<'_> {
                 }
             }
         }
+    }
+
+    /// The current host pointer mapping; logged whenever it changes (input diagnostics).
+    fn host_geometry(&self) -> Option<horizon_client::android_runtime::HostGeometry> {
+        let window = self.window.as_ref()?;
+        let physical = window.outer_size();
+        if physical.width == 0 || physical.height == 0 {
+            return None;
+        }
+        let inner = window.inner_size();
+        let [ox, oy, _, _] =
+            winit::platform::android::native_content_rect([physical.width, physical.height]);
+        let geometry = horizon_client::android_runtime::HostGeometry {
+            window: [physical.width, physical.height],
+            render: [inner.width, inner.height],
+            origin: [ox, oy],
+            scale: winit::platform::android::native_input_scale(),
+        };
+        if horizon_client::android_runtime::host_set_geometry(geometry) {
+            log::info!(
+                "CS host input: window {}x{}, render {}x{}, content origin {:?}, pointer scale {:.3}x{:.3}, focused {}",
+                geometry.window[0],
+                geometry.window[1],
+                geometry.render[0],
+                geometry.render[1],
+                geometry.origin,
+                geometry.scale[0],
+                geometry.scale[1],
+                self.focused
+            );
+        }
+        Some(geometry)
+    }
+
+    /// Overlay-window pixels → render-target pixels (see `HostEvent::Cursor`).
+    fn host_map_pointer(
+        geometry: Option<horizon_client::android_runtime::HostGeometry>,
+        x: f64,
+        y: f64,
+    ) -> (f64, f64) {
+        let Some(g) = geometry else {
+            return (x, y);
+        };
+        (
+            (x - f64::from(g.origin[0])) * g.scale[0],
+            (y - f64::from(g.origin[1])) * g.scale[1],
+        )
     }
 
     pub(super) fn android_poll_keyboard(&mut self) {

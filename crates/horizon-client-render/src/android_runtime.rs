@@ -2,7 +2,7 @@
 #[path = "graphics_startup.rs"]
 pub mod graphics_startup;
 use crate::android_gamepad::{Devices, InputMode};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 #[cfg(target_os = "android")]
 static CACHE_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 #[cfg(target_os = "android")]
@@ -225,7 +225,43 @@ pub fn configure_host(enabled: bool) {
 pub fn host_mode() -> bool {
     HOST_MODE.load(Ordering::Relaxed)
 }
+/// Input diagnostics (CS Engine): events the host handed over, events the game consumed, and the
+/// pointer mapping in use. Read back into `cs-exit.json` so a device where taps vanish shows where.
+static HOST_PUSHED: AtomicU64 = AtomicU64::new(0);
+static HOST_PROCESSED: AtomicU64 = AtomicU64::new(0);
+static HOST_GEOMETRY: std::sync::Mutex<Option<HostGeometry>> = std::sync::Mutex::new(None);
+/// How host pointer coordinates (overlay window pixels) map onto the render target.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HostGeometry {
+    /// Native window (surface) size in pixels.
+    pub window: [u32; 2],
+    /// Render target size (the window at the render scale).
+    pub render: [u32; 2],
+    /// Content rectangle origin inside the window (safe insets / aspect letterbox).
+    pub origin: [u32; 2],
+    /// Pixel scale from window content to render target.
+    pub scale: [f64; 2],
+}
+pub fn host_set_geometry(geometry: HostGeometry) -> bool {
+    let mut current = HOST_GEOMETRY.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if *current == Some(geometry) {
+        return false;
+    }
+    *current = Some(geometry);
+    true
+}
+pub fn host_geometry() -> Option<HostGeometry> {
+    *HOST_GEOMETRY.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+pub fn host_note_processed(count: usize) {
+    HOST_PROCESSED.fetch_add(count as u64, Ordering::Relaxed);
+}
+/// `(pushed by the host, processed by the game)`.
+pub fn host_stats() -> (u64, u64) {
+    (HOST_PUSHED.load(Ordering::Relaxed), HOST_PROCESSED.load(Ordering::Relaxed))
+}
 pub fn host_push(event: HostEvent) {
+    HOST_PUSHED.fetch_add(1, Ordering::Relaxed);
     let mut events = HOST_EVENTS.lock().unwrap();
     // Coalesce motion so a slow frame does not replay a long tail of deltas late.
     match (&event, events.last_mut()) {

@@ -15364,6 +15364,17 @@ impl ApplicationHandler for Game<'_> {
                 self.physical_buttons.remove(button);
             }
         }
+        // CS host mode: the launcher's control window holds Android's window focus on purpose
+        // (it owns touch, keys and the keyboard), so the engine window's focus loss means
+        // nothing — honouring it refused pointer capture after "Continue" and dropped camera
+        // input on devices where the focus callbacks arrive after the overlay attaches. The
+        // host sends `ReleaseAll` itself when it pauses.
+        #[cfg(target_os = "android")]
+        if horizon_client::android_runtime::host_mode()
+            && matches!(event, WindowEvent::Focused(false))
+        {
+            return;
+        }
         if let WindowEvent::Focused(false) = &event {
             #[cfg(target_os = "android")]
             {
