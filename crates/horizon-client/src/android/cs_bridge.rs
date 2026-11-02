@@ -639,6 +639,26 @@ pub extern "system" fn Java_com_craftstudio_cslauncher_engine_horizon_HorizonNat
     });
 }
 
+/// A touch began at (x, y) window pixels while the world has the pointer: if it lies on
+/// the hotbar drawn last frame, the engine selects that slot and the slot index (0..8)
+/// comes back so the launcher swallows the touch; -1 otherwise.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_craftstudio_cslauncher_engine_horizon_HorizonNative_nativeHostHotbarTap<'l>(
+    _env: JNIEnv<'l>,
+    _class: JClass<'l>,
+    x: jni::sys::jdouble,
+    y: jni::sys::jdouble,
+) -> jni::sys::jint {
+    let Some([rx, ry, rw, rh]) = horizon_client::android_runtime::host_hotbar() else {
+        return -1;
+    };
+    if rw <= 0.0 || rh <= 0.0 || x < rx || x >= rx + rw || y < ry || y >= ry + rh {
+        return -1;
+    }
+    host_push(HostEvent::HotbarTap { x, y });
+    (((x - rx) / rw * 9.0) as i32).clamp(0, 8)
+}
+
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_craftstudio_cslauncher_engine_horizon_HorizonNative_nativeHostScroll<'l>(
     _env: JNIEnv<'l>,

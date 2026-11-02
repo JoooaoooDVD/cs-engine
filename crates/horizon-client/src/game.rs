@@ -7566,6 +7566,28 @@ impl Game<'_> {
                 let attack_left = None;
                 let draws = hud_layout::hotbar_with_attack_side(wi, hi, &inputs, attack_left);
                 hud_layout::paint(&mut batch, &self.gui.atlas, &draws);
+                #[cfg(target_os = "android")]
+                if horizon_client::android_runtime::host_mode() {
+                    // The hotbar's window rectangle for the launcher's touch layer (hotbar
+                    // taps select slots there, as the engine's own touch controls do).
+                    let g = horizon_client::android_runtime::host_geometry();
+                    let to_window = |rx: f32, ry: f32| -> (f64, f64) {
+                        match g {
+                            Some(g) => (
+                                f64::from(rx) / g.scale[0].max(1e-6) + f64::from(g.origin[0]),
+                                f64::from(ry) / g.scale[1].max(1e-6) + f64::from(g.origin[1]),
+                            ),
+                            None => (f64::from(rx), f64::from(ry)),
+                        }
+                    };
+                    let (x0, y0) = to_window(
+                        (batch.width / 2.0 - 90.0) * batch.scale,
+                        (batch.height - 22.0) * batch.scale,
+                    );
+                    let (x1, y1) =
+                        to_window((batch.width / 2.0 + 90.0) * batch.scale, batch.height * batch.scale);
+                    horizon_client::android_runtime::host_set_hotbar(Some([x0, y0, x1 - x0, y1 - y0]));
+                }
                 for d in &draws {
                     if let hud_layout::GuiDraw::Item { slot, x, y, .. } = *d {
                         let stack = if slot == 40 {

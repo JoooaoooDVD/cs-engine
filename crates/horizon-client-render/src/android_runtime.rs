@@ -199,6 +199,9 @@ mod input_tests {
 // ---------------------------------------------------------------------------
 #[derive(Debug, Clone, PartialEq)]
 pub enum HostEvent {
+    /// A touch began on the hotbar (window pixels): select that slot, as the engine's own
+    /// touch controls do (`touch::hotbar_slot`).
+    HotbarTap { x: f64, y: f64 },
     /// A key by its `key.keyboard.*` name (or `action:<keybind>`), pressed or released.
     Key { token: String, down: bool },
     /// Relative mouse motion in window pixels (camera when the pointer is captured).
@@ -289,6 +292,16 @@ pub fn host_set_grab(grabbed: bool) {
 }
 pub fn host_grab() -> bool {
     HOST_GRAB.load(Ordering::Relaxed)
+}
+/// Where the hotbar was drawn last frame, in overlay-window pixels `[x, y, w, h]`
+/// (None when no hotbar is on screen): the launcher's touch layer swallows touches
+/// there and hands them over as `HostEvent::HotbarTap`.
+static HOST_HOTBAR: std::sync::Mutex<Option<[f64; 4]>> = std::sync::Mutex::new(None);
+pub fn host_set_hotbar(rect: Option<[f64; 4]>) {
+    *HOST_HOTBAR.lock().unwrap_or_else(|e| e.into_inner()) = rect;
+}
+pub fn host_hotbar() -> Option<[f64; 4]> {
+    *HOST_HOTBAR.lock().unwrap_or_else(|e| e.into_inner())
 }
 /// The world's public address (e4mc) while it is published, for the launcher's invites.
 static HOST_PUBLISHED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);

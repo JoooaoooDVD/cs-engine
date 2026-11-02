@@ -628,6 +628,22 @@ impl Game<'_> {
                         }
                     }
                 }
+                HostEvent::HotbarTap { x, y } => {
+                    if self.screen == Screen::Playing
+                        && self.title.is_none()
+                        && !self.spectator()
+                        && let Some(r) = self.renderer.as_ref()
+                    {
+                        let (x, y) = Self::host_map_pointer(geometry, x, y);
+                        let batch = HudBatch::new([r.config.width, r.config.height]);
+                        let point = [x as f32 / batch.scale, y as f32 / batch.scale];
+                        if let Some(slot) =
+                            horizon_client::touch::hotbar_slot(batch.width, batch.height, point)
+                        {
+                            self.selected = slot;
+                        }
+                    }
+                }
                 HostEvent::Skin { skin, model, cape } => {
                     let path = |p: &str| (!p.is_empty()).then(|| std::path::PathBuf::from(p));
                     if let Err(e) = horizon_client::skins::set_offline_skin(
