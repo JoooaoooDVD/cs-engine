@@ -21,7 +21,10 @@ python3 tools/cs_native_mods.py "$MODS"
 # The tool snapshots the whole tree and refuses symlinks; the repo keeps one convenience link.
 find . -path ./.git -prune -o -type l -print | while read -r l; do rm -f "$l"; done
 git rev-parse HEAD > .horizon-revision
-cargo fetch --locked
+# The fork builds without --locked: the lock gains the fork's own dependencies here, then
+# horizon-mixins (offline, locked metadata) sees a complete lock.
+cargo fetch
+cargo metadata --format-version 1 --offline --locked > /dev/null
 rm -rf "$STAGE"
 "$BIN" apply --workspace . --mods "$MODS" --out "$STAGE" > "$STAGE.json"
 python3 - "$STAGE" <<'PY'
