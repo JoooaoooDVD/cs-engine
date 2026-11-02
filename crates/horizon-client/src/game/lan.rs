@@ -1295,12 +1295,13 @@ impl Game<'_> {
         }
         // IntegratedServer.publishServer: the MOTD names the host's profile.
         let name = self.options.player_name();
-        let motd = format!("{name} - {}", self.level.name);
+        let motd = cs_default_motd(&name, &self.level.name);
         // CS Launcher Plus: `cs-server.json` in the game folder may set the MOTD
         // (`{name}`, `{world}` placeholders) and the icon file; `cs-server-icon.png`
         // (64x64) is the icon when it exists, so the world shows the launcher's icon
         // in friends' server lists.
-        let (motd, favicon) = cs_server_branding(&motd, &name, &self.level.name);
+        let branding = cs_server_branding(&motd, &name, &self.level.name);
+        let (motd, favicon, max_players) = (branding.motd, branding.favicon, branding.max_players);
         let host_uuid = self.level.player_uuid.map_or_else(
             || offline_uuid(&name),
             |u| {
@@ -1321,7 +1322,7 @@ impl Game<'_> {
             dimension: self.dim.id().to_owned(),
             levels: self.level_shapes,
             seed: self.level.seed,
-            max_players: MAX_PLAYERS,
+            max_players,
             dedicated: false,
             integrated: false,
         };
@@ -1329,7 +1330,7 @@ impl Game<'_> {
             levels: self.level_shapes,
             online: horizon_client::lan::OnlineMode::lan(),
             favicon,
-            ..NetConfig::lan(settings.port, motd, MAX_PLAYERS)
+            ..NetConfig::lan(settings.port, motd, max_players)
         };
         self.lan_host(settings, net, config, Some(host_uuid))
     }
@@ -2857,10 +2858,22 @@ mod tests {
 /// The MOTD and favicon of the world opened to LAN, as CS Launcher Plus configures
 /// them: `cs-server.json` (`{"motd": "...", "icon": "file.png"}`) and
 /// `cs-server-icon.png` in the game folder. Without them vanilla's MOTD and no icon.
-pub(super) fn cs_server_branding(default_motd: &str, name: &str, world: &str) -> (String, Option<Vec<u8>>) {
+/// What the Host tab can change about the published world.
+pub(super) struct CsServerBranding {
+    pub motd: String,
+    pub favicon: Option<Vec<u8>>,
+    /// Players including the host (`cs-server.json` `max_players`, else `MAX_PLAYERS`).
+    pub max_players: usize,
+}
+/// The MOTD when none is set: the host, the world and the launcher.
+pub(super) fn cs_default_motd(name: &str, world: &str) -> String {
+    format!("{name} - {world} | CS Launcher Plus")
+}
+pub(super) fn cs_server_branding(default_motd: &str, name: &str, world: &str) -> CsServerBranding {
     let dir = std::env::current_dir().unwrap_or_default();
     let mut motd = default_motd.to_owned();
     let mut icon = dir.join("cs-server-icon.png");
+    let mut max_players = MAX_PLAYERS;
     if let Ok(text) = std::fs::read_to_string(dir.join("cs-server.json"))
         && let Ok(json) = serde_json::from_str::<serde_json::Value>(&text)
     {
@@ -2875,11 +2888,18 @@ pub(super) fn cs_server_branding(default_motd: &str, name: &str, world: &str) ->
         {
             icon = dir.join(i);
         }
+        if let Some(n) = json["max_players"].as_u64() {
+            max_players = (n as usize).clamp(2, 64);
+        }
     }
     // ServerStatus.Favicon: a PNG the client decodes as 64x64; anything else is dropped
     // on arrival, so only a plausible PNG is sent (the launcher writes a 64x64 one).
     let favicon = std::fs::read(&icon)
         .ok()
         .filter(|b| b.len() > 8 && b.len() < 256 * 1024 && b.starts_with(b"\x89PNG"));
-    (motd, favicon)
+    CsServerBranding {
+        motd,
+        favicon,
+        max_players,
+    }
 }

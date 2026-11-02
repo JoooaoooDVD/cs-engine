@@ -18980,6 +18980,10 @@ impl ApplicationHandler for App {
             }
             App::Loading(loading) => {
                 loading.about_to_wait(event_loop);
+                // CS host mode: taps on the loading screen must not queue up and
+                // press the title's buttons when the game appears.
+                #[cfg(target_os = "android")]
+                horizon_client::android_runtime::host_discard_input();
                 if loading.error.is_some() {
                     crate::game::exit_app(event_loop);
                     return;
@@ -19006,7 +19010,11 @@ impl ApplicationHandler for App {
         };
         match step {
             Step::Waiting => {}
-            Step::Ready(game) => *self = App::Ready(game),
+            Step::Ready(game) => {
+                #[cfg(target_os = "android")]
+                horizon_client::android_runtime::host_discard_input();
+                *self = App::Ready(game);
+            }
             Step::Done => crate::game::exit_app(event_loop),
             Step::Failed(e) => {
                 if let App::Loading(loading) = self {

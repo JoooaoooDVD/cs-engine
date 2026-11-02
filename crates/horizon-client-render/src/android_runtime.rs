@@ -223,7 +223,11 @@ pub enum HostEvent {
 static HOST_MODE: AtomicBool = AtomicBool::new(false);
 static HOST_GRAB: AtomicBool = AtomicBool::new(false);
 static HOST_KEYBOARD: AtomicBool = AtomicBool::new(false);
-static HOST_EVENTS: std::sync::Mutex<Vec<HostEvent>> = std::sync::Mutex::new(Vec::new());
+static HOST_EVENTS: std::sync::Mutex<Vec<(std::time::Instant, HostEvent)>> =
+    std::sync::Mutex::new(Vec::new());
+/// A click older than this when the game gets to it was meant for a screen that is gone
+/// (a stall, the loading screen): it is dropped rather than replayed.
+const HOST_CLICK_STALE: std::time::Duration = std::time::Duration::from_millis(400);
 /// The launcher drives input; the engine draws no touch controls and ignores window touches.
 pub fn configure_host(enabled: bool) {
     HOST_MODE.store(enabled, Ordering::Relaxed);
@@ -269,22 +273,46 @@ pub fn host_stats() -> (u64, u64) {
 pub fn host_push(event: HostEvent) {
     HOST_PUSHED.fetch_add(1, Ordering::Relaxed);
     let mut events = HOST_EVENTS.lock().unwrap();
+    let now = std::time::Instant::now();
     // Coalesce motion so a slow frame does not replay a long tail of deltas late.
     match (&event, events.last_mut()) {
-        (HostEvent::Look { dx, dy }, Some(HostEvent::Look { dx: px, dy: py })) => {
+        (HostEvent::Look { dx, dy }, Some((_, HostEvent::Look { dx: px, dy: py }))) => {
             *px += dx;
             *py += dy;
         }
-        (HostEvent::Cursor { .. }, Some(last @ HostEvent::Cursor { .. })) => *last = event,
+        (HostEvent::Cursor { .. }, Some((at, last @ HostEvent::Cursor { .. }))) => {
+            *last = event;
+            *at = now;
+        }
         _ => {
             if events.len() < 4096 {
-                events.push(event);
+                events.push((now, event));
             }
         }
     }
 }
+/// The queued host events. Clicks and hotbar taps that waited longer than
+/// `HOST_CLICK_STALE` (the game was loading or stalled) are dropped: replaying
+/// them would press whatever button now sits under that position.
 pub fn host_take() -> Vec<HostEvent> {
+    let now = std::time::Instant::now();
     std::mem::take(&mut *HOST_EVENTS.lock().unwrap())
+        .into_iter()
+        .filter(|(at, event)| {
+            !(matches!(event, HostEvent::Button { down: true, .. } | HostEvent::HotbarTap { .. })
+                && now.duration_since(*at) > HOST_CLICK_STALE)
+        })
+        .map(|(_, event)| event)
+        .collect()
+}
+/// While the loading screen is up the game does not read input: everything but
+/// the player's skin (sent once at launch) is thrown away so that it does not
+/// land on the title screen's buttons when the game appears.
+pub fn host_discard_input() {
+    HOST_EVENTS
+        .lock()
+        .unwrap()
+        .retain(|(_, event)| matches!(event, HostEvent::Skin { .. }));
 }
 /// Game wants the pointer captured (world view) rather than a visible cursor (menus).
 pub fn host_set_grab(grabbed: bool) {

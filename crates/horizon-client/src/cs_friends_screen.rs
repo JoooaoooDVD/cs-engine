@@ -64,6 +64,8 @@ pub struct Ui {
     pub focus: Focus,
     /// 0 = CS Launcher icon, 1 = the world's icon, 2 = a custom file.
     pub icon: usize,
+    /// Players the published world takes, host included.
+    pub max_players: usize,
     /// A friend's Remove was pressed once; the next press removes.
     pub confirm_remove: Option<String>,
 }
@@ -164,6 +166,8 @@ pub enum Action {
     InviteAll,
     SaveMotd,
     CycleIcon,
+    /// Player limit up (+1) or down (-1) a step.
+    Players(i32),
     Done,
 }
 
@@ -611,7 +615,7 @@ fn layout(atlas: &HudAtlas, (w, h): (f32, f32), ui: &Ui, view: &View) -> Layout 
                 y += 24.0;
             }
             if hv.in_world {
-                y += 4.0;
+                y += 2.0;
                 lines.push(("Server name friends see (MOTD)".to_owned(), grey(), left, y));
                 y += 11.0;
                 fields.push(Field {
@@ -620,7 +624,7 @@ fn layout(atlas: &HudAtlas, (w, h): (f32, f32), ui: &Ui, view: &View) -> Layout 
                     w: width - 64.0,
                     focus: Focus::Motd,
                     value: ui.motd.clone(),
-                    placeholder: "{name}'s world · {world}",
+                    placeholder: "{name} - {world} | CS Launcher Plus",
                     focused: ui.focus == Focus::Motd,
                 });
                 buttons.push(Button {
@@ -631,7 +635,7 @@ fn layout(atlas: &HudAtlas, (w, h): (f32, f32), ui: &Ui, view: &View) -> Layout 
                     action: Action::SaveMotd,
                     active: true,
                 });
-                y += 26.0;
+                y += 24.0;
                 let icon = ["CS Launcher icon", "This world's icon", "Custom file"][ui.icon.min(2)];
                 lines.push((format!("Server icon: {icon}"), grey(), left, y + 6.0));
                 buttons.push(Button {
@@ -642,10 +646,33 @@ fn layout(atlas: &HudAtlas, (w, h): (f32, f32), ui: &Ui, view: &View) -> Layout 
                     action: Action::CycleIcon,
                     active: true,
                 });
-                y += 24.0;
-                if ui.icon == 2 {
-                    add(&mut lines, "Custom: put a 64x64 cs-server-icon-custom.png in this profile's game folder.", dim(), &mut y);
+                y += 22.0;
+                if ui.icon == 2 && y + 44.0 < bottom {
+                    add(&mut lines, "Custom: a 64x64 cs-server-icon-custom.png in this profile's game folder.", dim(), &mut y);
+                    y += 2.0;
                 }
+                lines.push((
+                    format!("Players (you included): {}", ui.max_players.max(2)),
+                    grey(),
+                    left,
+                    y + 6.0,
+                ));
+                buttons.push(Button {
+                    x: right - 60.0,
+                    y,
+                    w: 28.0,
+                    label: "-".to_owned(),
+                    action: Action::Players(-1),
+                    active: ui.max_players > 2,
+                });
+                buttons.push(Button {
+                    x: right - 28.0,
+                    y,
+                    w: 28.0,
+                    label: "+".to_owned(),
+                    action: Action::Players(1),
+                    active: ui.max_players < 32,
+                });
                 let _ = y;
             }
         }

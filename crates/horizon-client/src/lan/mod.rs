@@ -409,6 +409,10 @@ impl Shared {
     pub fn max_players(&self) -> usize {
         self.max_players.load(Ordering::Relaxed)
     }
+    /// CS Launcher Plus: the Host tab's player limit, for the next logins and pings.
+    pub fn set_max_players(&self, n: usize) {
+        self.max_players.store(n.max(1), Ordering::Relaxed);
+    }
     pub fn release(&self, uuid: u128) {
         self.online.lock().unwrap().retain(|(u, _)| *u != uuid);
     }

@@ -22,9 +22,10 @@ const URL: &str = "https://ygteavpkursyeyfthlxm.supabase.co/rest/v1/rpc/";
 const KEY: &str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlndGVhdnBrdXJzeWV5ZnRobHhtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI2ODk5NjksImV4cCI6MjEwODI2NTk2OX0.wqCioElyk_GlIkeaiRHlls7hk-WDABhigwb1EGy8iJU";
 const ENGINE: &str = "cs-engine";
 /// Heartbeat period: friends show offline 75 s after the last one.
-const SYNC_EVERY: Duration = Duration::from_secs(8);
-/// While the chat tab is open, new messages land faster.
-const SYNC_CHAT: Duration = Duration::from_secs(3);
+const SYNC_EVERY: Duration = Duration::from_secs(6);
+/// With the Friends screen open, and with a conversation open, news lands faster.
+const SYNC_SCREEN: Duration = Duration::from_secs(3);
+const SYNC_CHAT: Duration = Duration::from_millis(1500);
 
 static DIR: OnceLock<PathBuf> = OnceLock::new();
 /// Where the identity file lives (the launcher's home, shared by every profile).
@@ -123,7 +124,8 @@ enum Cmd {
         to: String,
         text: String,
     },
-    ChatOpen(bool),
+    /// 0 = in the background, 1 = the Friends screen is open, 2 = a conversation is open.
+    Attention(u8),
     SyncNow,
 }
 enum Reply {
@@ -182,6 +184,7 @@ pub struct Client {
     known: HashMap<String, String>,
     first_snapshot: bool,
     presence: (String, Option<String>, Option<String>),
+    attention: u8,
 }
 
 impl Client {
@@ -202,6 +205,7 @@ impl Client {
             known: HashMap::new(),
             first_snapshot: true,
             presence: ("online".to_owned(), None, None),
+            attention: 0,
         }
     }
 
@@ -275,8 +279,13 @@ impl Client {
             text: text.to_owned(),
         });
     }
-    pub fn chat_open(&self, open: bool) {
-        self.send(Cmd::ChatOpen(open));
+    /// How closely the player watches: 0 background, 1 screen open, 2 conversation open.
+    pub fn attention(&mut self, level: u8) {
+        if self.attention == level {
+            return;
+        }
+        self.attention = level;
+        self.send(Cmd::Attention(level));
     }
     pub fn sync_now(&self) {
         self.send(Cmd::SyncNow);
@@ -495,7 +504,7 @@ fn worker(name: &str, cmds: &Receiver<Cmd>, out: &Sender<Reply>) {
     let mut registered = false;
     let mut since: i64 = 0;
     let mut presence = ("online".to_owned(), None::<String>, None::<String>);
-    let mut chat_open = false;
+    let mut attention = 0u8;
     let mut next_sync = Instant::now();
     let mut name = name.to_owned();
     loop {
@@ -621,9 +630,9 @@ fn worker(name: &str, cmds: &Receiver<Cmd>, out: &Sender<Reply>) {
                         }
                     }
                 }
-                Cmd::ChatOpen(open) => {
-                    chat_open = open;
-                    sync = open;
+                Cmd::Attention(level) => {
+                    sync = level > attention;
+                    attention = level;
                 }
                 Cmd::SyncNow => sync = true,
             }
@@ -651,7 +660,12 @@ fn worker(name: &str, cmds: &Receiver<Cmd>, out: &Sender<Reply>) {
                 let _ = out.send(Reply::Error(format!("CS Friends sync failed ({e})")));
             }
         }
-        next_sync = Instant::now() + if chat_open { SYNC_CHAT } else { SYNC_EVERY };
+        next_sync = Instant::now()
+            + match attention {
+                0 => SYNC_EVERY,
+                1 => SYNC_SCREEN,
+                _ => SYNC_CHAT,
+            };
     }
 }
 

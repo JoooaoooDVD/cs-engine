@@ -22,6 +22,7 @@ use winit::{
 struct ServerBranding {
     motd: String,
     icon: usize,
+    max_players: usize,
 }
 const ICON_FILES: [&str; 3] = ["cs-server-icon.png", "", "cs-server-icon-custom.png"];
 
@@ -31,7 +32,10 @@ fn branding_path() -> std::path::PathBuf {
         .join("cs-server.json")
 }
 fn read_branding() -> ServerBranding {
-    let mut b = ServerBranding::default();
+    let mut b = ServerBranding {
+        max_players: horizon_client::lan::MAX_PLAYERS,
+        ..ServerBranding::default()
+    };
     if let Ok(text) = std::fs::read_to_string(branding_path())
         && let Ok(json) = serde_json::from_str::<serde_json::Value>(&text)
     {
@@ -41,6 +45,9 @@ fn read_branding() -> ServerBranding {
             "cs-server-icon-custom.png" => 2,
             _ => 1,
         };
+        if let Some(n) = json["max_players"].as_u64() {
+            b.max_players = (n as usize).clamp(2, 64);
+        }
     }
     b
 }
@@ -76,17 +83,25 @@ impl Game<'_> {
             let b = read_branding();
             self.cs_friends_ui.motd = b.motd;
             self.cs_friends_ui.icon = b.icon;
+            self.cs_friends_ui.max_players = b.max_players;
         }
         let (status, address, world) = self.cs_presence();
         let chat_open = self.screen == Screen::Friends
             && self.cs_friends_ui.tab == Tab::Chat
             && self.cs_friends_ui.chat_with.is_some();
+        let attention = if chat_open {
+            2
+        } else if self.screen == Screen::Friends {
+            1
+        } else {
+            0
+        };
         let notices = {
             let Some(client) = self.cs_friends.as_mut() else {
                 return;
             };
             client.set_presence(status, address.as_deref(), world.as_deref());
-            client.chat_open(chat_open);
+            client.attention(attention);
             client.poll();
             if chat_open
                 && let Some(id) = self.cs_friends_ui.chat_with.clone()
@@ -363,6 +378,15 @@ impl Game<'_> {
                 ui.icon = (ui.icon + 1) % 3;
                 self.cs_save_branding();
             }
+            Action::Players(step) => {
+                // 2, 4, 6, 8, 10, 12, 16, 20, 24, 32.
+                const STEPS: [usize; 10] = [2, 4, 6, 8, 10, 12, 16, 20, 24, 32];
+                let cur = ui.max_players.max(2);
+                let i = STEPS.iter().position(|&n| n >= cur).unwrap_or(STEPS.len() - 1);
+                let next = (i as i32 + step).clamp(0, STEPS.len() as i32 - 1) as usize;
+                ui.max_players = STEPS[next];
+                self.cs_save_branding();
+            }
         }
     }
 
@@ -412,10 +436,10 @@ impl Game<'_> {
     /// The Host tab's MOTD and icon: saved for the next Open to LAN and
     /// applied to the running one.
     fn cs_save_branding(&mut self) {
-        let ui = &self.cs_friends_ui;
-        let mut motd = ui.motd.trim().to_owned();
+        let mut motd = self.cs_friends_ui.motd.trim().to_owned();
         motd.truncate(59 * 4);
-        let icon_file = match ui.icon {
+        let max_players = self.cs_friends_ui.max_players.clamp(2, 64);
+        let icon_file = match self.cs_friends_ui.icon {
             1 => {
                 // The world's own icon (saves/<world>/icon.png), copied so the
                 // path in cs-server.json stays inside the game folder.
@@ -435,7 +459,7 @@ impl Game<'_> {
             2 => ICON_FILES[2],
             _ => ICON_FILES[0],
         };
-        let json = serde_json::json!({ "motd": motd, "icon": icon_file });
+        let json = serde_json::json!({ "motd": motd, "icon": icon_file, "max_players": max_players });
         if let Err(e) = std::fs::write(branding_path(), json.to_string()) {
             self.system_message(Text::literal(format!("Couldn't save the server name: {e}")));
             return;
@@ -443,10 +467,11 @@ impl Game<'_> {
         // Live, while the world is open to LAN.
         if let Some(host) = &self.lan {
             let name = self.options.player_name();
-            let default = format!("{name} - {}", self.level.name);
-            let (motd, favicon) = super::lan::cs_server_branding(&default, &name, &self.level.name);
-            host.hub.lan.shared.set_motd(motd);
-            host.hub.lan.shared.set_favicon(favicon);
+            let default = super::lan::cs_default_motd(&name, &self.level.name);
+            let b = super::lan::cs_server_branding(&default, &name, &self.level.name);
+            host.hub.lan.shared.set_motd(b.motd);
+            host.hub.lan.shared.set_favicon(b.favicon);
+            host.hub.lan.shared.set_max_players(b.max_players);
         }
         if ui_icon_missing(icon_file) {
             self.system_message(Text::literal(format!(
