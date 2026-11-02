@@ -88,7 +88,19 @@ pub(crate) fn run(shared: Arc<Shared>) {
         // The endpoint must outlive the session: dropping it kills the
         // connections silently, without the close frame that tells the relay
         // to end its guests. It is released only after wait_idle.
-        let endpoint = match make_endpoint() {
+        // The relay's address decides the socket family: on IPv6-only mobile
+        // networks (DNS64/NAT64, as Jio hands out) the name resolves to an IPv6
+        // address and an IPv4 socket can't reach it ("invalid remote address").
+        let address = match resolve_relay(&relay).await {
+            Ok(address) => address,
+            Err(error) => {
+                if !shared.stopped() {
+                    shared.set_problem(error.to_string());
+                }
+                return;
+            }
+        };
+        let endpoint = match make_endpoint(address.is_ipv6()) {
             Ok(endpoint) => endpoint,
             Err(error) => {
                 if !shared.stopped() {
@@ -97,7 +109,7 @@ pub(crate) fn run(shared: Arc<Shared>) {
                 return;
             }
         };
-        let result = session(&shared, relay, stop.clone(), &endpoint).await;
+        let result = session(&shared, relay, address, stop.clone(), &endpoint).await;
         if let Err(error) = result
             && !shared.stopped()
         {
@@ -132,7 +144,21 @@ struct BrokerResponse {
     port: u16,
 }
 
-fn make_endpoint() -> anyhow::Result<Endpoint> {
+/// The relay's socket address: IPv4 when the name offers one (the common case), else
+/// the first IPv6 one (IPv6-only networks reach IPv4 relays through NAT64).
+async fn resolve_relay((host, port): &(String, u16)) -> anyhow::Result<SocketAddr> {
+    let addresses: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), *port))
+        .await?
+        .collect();
+    addresses
+        .iter()
+        .copied()
+        .find(SocketAddr::is_ipv4)
+        .or_else(|| addresses.first().copied())
+        .ok_or_else(|| anyhow::anyhow!("the relay's name didn't resolve"))
+}
+
+fn make_endpoint(ipv6: bool) -> anyhow::Result<Endpoint> {
     let mut root = rustls::RootCertStore::empty();
     root.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let mut tls = rustls::ClientConfig::builder()
@@ -149,7 +175,8 @@ fn make_endpoint() -> anyhow::Result<Endpoint> {
         quinn::crypto::rustls::QuicClientConfig::try_from(tls)?,
     ));
     client.transport_config(Arc::new(transport));
-    let mut endpoint = Endpoint::client("0.0.0.0:0".parse()?)?;
+    let bind = if ipv6 { "[::]:0" } else { "0.0.0.0:0" };
+    let mut endpoint = Endpoint::client(bind.parse()?)?;
     endpoint.set_default_client_config(client);
     Ok(endpoint)
 }
@@ -157,15 +184,12 @@ fn make_endpoint() -> anyhow::Result<Endpoint> {
 async fn session(
     shared: &Arc<Shared>,
     (host, port): (String, u16),
+    address: SocketAddr,
     mut stop: watch::Receiver<bool>,
     endpoint: &Endpoint,
 ) -> anyhow::Result<()> {
-    log::info!("e4mc: using relay {host}:{port}");
+    log::info!("e4mc: using relay {host}:{port} at {address}");
 
-    let address = tokio::net::lookup_host((host.as_str(), port))
-        .await?
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("the relay's name didn't resolve"))?;
     let connecting = endpoint.connect(address, host.as_str())?;
     // A relay that doesn't answer hangs the handshake forever without this.
     let connection = tokio::select! {
