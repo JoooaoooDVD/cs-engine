@@ -472,6 +472,17 @@ impl Game<'_> {
                     _ => {}
                 }
             } else if let Some(p) = self.creatures.projectiles.iter_mut().find(|p| p.id == id) {
+                // Entity.DATA_SHARED_FLAGS_ID: bit 0 is "on fire" — a Flame
+                // arrow burns on screen (EntityRenderer renders the fire).
+                if let (0, Value::Byte(flags)) = (index, value)
+                    && let Some(a) = p.arrow.as_mut()
+                {
+                    if flags & 1 != 0 {
+                        a.ignite_for_ticks(i32::MAX / 4);
+                    } else {
+                        a.fire_ticks = 0;
+                    }
+                }
                 match (&mut p.kind, index, value) {
                     // AbstractArrow.ID_FLAGS (critical) and IN_GROUND.
                     (ProjectileKind::Arrow { critical, .. }, 8, Value::Byte(flags)) => {

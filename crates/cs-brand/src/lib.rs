@@ -76,3 +76,7 @@ mod tests {
         assert!(!NAME.contains("Horizon"));
     }
 }
+
+/// The CS Launcher icon (64x64 PNG) worlds hosted from CS Engine show in friends'
+/// server lists when no `cs-server-icon.png` is in the game folder.
+pub const SERVER_ICON: &[u8] = include_bytes!("../cs-server-icon.png");

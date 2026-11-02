@@ -1288,6 +1288,26 @@ impl Game<'_> {
         ));
         Ok(())
     }
+    /// CS Launcher Plus: read `cs-server.json` (Host tab) and apply the MOTD,
+    /// the icon and the player limit to the running LAN host — the integrated
+    /// server's (on its thread) or the window's own. Returns what was applied.
+    pub(super) fn cs_apply_branding(&mut self) -> Option<(String, bool, usize)> {
+        let host = self.lan.as_mut()?;
+        let name = host.host_name.clone();
+        let default = cs_default_motd(&name, &self.level.name);
+        let b = cs_server_branding(&default, &name, &self.level.name);
+        let has_icon = b.favicon.is_some();
+        host.hub.lan.shared.set_motd(b.motd.clone());
+        host.hub.lan.shared.set_favicon(b.favicon);
+        host.hub.lan.shared.set_max_players(b.max_players);
+        host.hub.config.max_players = b.max_players;
+        log::info!(
+            "CS server branding: motd={:?} icon={has_icon} max_players={}",
+            b.motd,
+            b.max_players
+        );
+        Some((b.motd, has_icon, b.max_players))
+    }
     /// IntegratedServer.publishServer without the screen's announcement.
     pub(super) fn lan_start(&mut self, settings: LanSettings) -> Result<()> {
         if self.lan.is_some() || self.remote.is_some() || self.title.is_some() {
@@ -2867,7 +2887,8 @@ pub(super) struct CsServerBranding {
 }
 /// The MOTD when none is set: the host, the world and the launcher.
 pub(super) fn cs_default_motd(name: &str, world: &str) -> String {
-    format!("{name} - {world} | CS Launcher Plus")
+    // Two lines in the server list: the world and its host, then the launcher.
+    format!("{world} - hosted by {name}\nCS Launcher Plus")
 }
 pub(super) fn cs_server_branding(default_motd: &str, name: &str, world: &str) -> CsServerBranding {
     let dir = std::env::current_dir().unwrap_or_default();
@@ -2896,7 +2917,10 @@ pub(super) fn cs_server_branding(default_motd: &str, name: &str, world: &str) ->
     // on arrival, so only a plausible PNG is sent (the launcher writes a 64x64 one).
     let favicon = std::fs::read(&icon)
         .ok()
-        .filter(|b| b.len() > 8 && b.len() < 256 * 1024 && b.starts_with(b"\x89PNG"));
+        .filter(|b| b.len() > 8 && b.len() < 256 * 1024 && b.starts_with(b"\x89PNG"))
+        // The CS Launcher icon when the chosen file is missing (the default choice
+        // never depends on the launcher having written it).
+        .or_else(|| Some(cs_brand::SERVER_ICON.to_vec()));
     CsServerBranding {
         motd,
         favicon,

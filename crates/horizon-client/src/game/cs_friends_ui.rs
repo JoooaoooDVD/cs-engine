@@ -464,16 +464,17 @@ impl Game<'_> {
             self.system_message(Text::literal(format!("Couldn't save the server name: {e}")));
             return;
         }
-        // Live, while the world is open to LAN.
-        if let Some(host) = &self.lan {
-            let name = self.options.player_name();
-            let default = super::lan::cs_default_motd(&name, &self.level.name);
-            let b = super::lan::cs_server_branding(&default, &name, &self.level.name);
-            host.hub.lan.shared.set_motd(b.motd);
-            host.hub.lan.shared.set_favicon(b.favicon);
-            host.hub.lan.shared.set_max_players(b.max_players);
+        // Live, while the world is open: the integrated server's host (on its
+        // thread) or the window's own LAN host.
+        let applied = if let Some(server) = &self.integrated {
+            server.call(|g| g.cs_apply_branding()).flatten()
+        } else {
+            self.cs_apply_branding()
+        };
+        if let Some((_, _, max)) = applied {
+            self.cs_friends_ui.max_players = max;
         }
-        if ui_icon_missing(icon_file) {
+        if icon_file != ICON_FILES[0] && ui_icon_missing(icon_file) {
             self.system_message(Text::literal(format!(
                 "Icon file {icon_file} not found in the game folder; friends see no icon until it exists."
             )));

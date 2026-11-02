@@ -627,7 +627,7 @@ impl Game<'_> {
             // IntegratedServer.initServer: the MOTD names the owner and the world.
             ..NetConfig::lan(
                 0,
-                format!("{} - {}", launch.player, self.level.name),
+                super::lan::cs_default_motd(&launch.player, &self.level.name),
                 MAX_PLAYERS,
             )
         };
@@ -904,6 +904,8 @@ impl Game<'_> {
                 // IntegratedServer.setGuestCommandAccess, then updatePermissions.
                 host.hub.config.guest_commands = settings.guest_commands && allow_commands;
                 host.hub.resend_commands();
+                // CS Launcher Plus: the Host tab's MOTD, icon and player limit.
+                self.cs_apply_branding();
             }
             Publish::Close => {
                 host.hub.lan.stop_listening();

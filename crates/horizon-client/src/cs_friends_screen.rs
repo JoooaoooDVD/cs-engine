@@ -624,7 +624,7 @@ fn layout(atlas: &HudAtlas, (w, h): (f32, f32), ui: &Ui, view: &View) -> Layout 
                     w: width - 64.0,
                     focus: Focus::Motd,
                     value: ui.motd.clone(),
-                    placeholder: "{name} - {world} | CS Launcher Plus",
+                    placeholder: "{world} - hosted by {name} / CS Launcher Plus",
                     focused: ui.focus == Focus::Motd,
                 });
                 buttons.push(Button {

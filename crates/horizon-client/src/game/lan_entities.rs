@@ -527,6 +527,11 @@ impl Game<'_> {
                 Some(g) => g.entity_id,
                 None => owner(p.owner),
             };
+            // Entity.DATA_SHARED_FLAGS_ID bit 0: a burning projectile (Flame
+            // arrows) draws its flames on every client.
+            if p.arrow.as_deref().is_some_and(|a| a.on_fire()) {
+                e.meta.push((0, serializer::BYTE, Value::Byte(1)));
+            }
             match &p.kind {
                 K::Arrow { critical, .. } => {
                     let a = p.arrow.as_deref();
