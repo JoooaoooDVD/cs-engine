@@ -102,6 +102,8 @@ mod dragon;
 mod dynamic_lights;
 mod cs_friends_ui;
 mod cs_hud;
+mod cs_hud_edit;
+mod cs_invite_banner;
 mod e4mc_friends;
 mod enchant_effects;
 mod end;
@@ -1882,6 +1884,15 @@ struct Game<'a> {
     server_packs: server_packs::ServerPackState,
     /// The link a chat click asks to open (`ConfirmLinkScreen`).
     link_prompt: Option<String>,
+    /// CS Engine HUD Editor (game/cs_hud_edit.rs): open state, saved places, this frame's boxes
+    /// and the HUD's inner area `(width, height, pad x, pad y)`.
+    cs_hud_edit: Option<cs_hud_edit::Editor>,
+    cs_hud_layout: Option<cs_hud_edit::Layout>,
+    cs_hud_rects: Vec<(cs_hud_edit::Module, [f32; 4])>,
+    cs_hud_inset: (f32, f32, f32, f32),
+    /// The launcher's control editor is open (`cs:blur`): the pause menu shows no buttons.
+    cs_host_blur: bool,
+    cs_host_paused: bool,
     /// A server's Code of Conduct to accept (game/code_of_conduct.rs).
     code_of_conduct: Option<code_of_conduct::Prompt>,
     dialogs: dialogs::DialogState,
@@ -7421,6 +7432,7 @@ impl Game<'_> {
         self.draw_pack_prompt(&mut batch);
         self.draw_code_of_conduct(&mut batch);
         self.draw_link_prompt(&mut batch);
+        self.draw_cs_hud_edit(&mut batch);
         // Gui.extractRenderState: the debug overlay comes after the screen
         // and the toasts, so it is over everything, menus included.
         let margins = self.hud_safe_margins();
@@ -7499,6 +7511,7 @@ impl Game<'_> {
                     self.settings.file.bool("hideSplashTexts"),
                 );
             }
+            self.draw_cs_invite_banner(&mut batch);
             self.draw_toasts(&mut batch, false);
             self.draw_tutorial_toasts(&mut batch, false);
             self.draw_pack_toasts(&mut batch, false);
@@ -7815,6 +7828,7 @@ impl Game<'_> {
             Screen::Playing | Screen::Options | Screen::Win => {}
         }
         horizon_client::hud::inset_overlay(&mut batch, margins, |b| self.draw_saving_indicator(b));
+        horizon_client::hud::inset_overlay(&mut batch, margins, |b| self.draw_cs_invite_banner(b));
         horizon_client::hud::inset_overlay(&mut batch, margins, |b| self.draw_toasts(b, !show_hud));
         horizon_client::hud::inset_overlay(&mut batch, margins, |b| {
             self.draw_pack_toasts(b, !show_hud)
@@ -15791,6 +15805,24 @@ impl ApplicationHandler for Game<'_> {
                         self.link_prompt_click();
                     }
                 }
+                // CS HUD Editor: every press and release is its (drag, bar buttons).
+                WindowEvent::MouseInput { state, button, .. } if self.cs_hud_edit.is_some() => {
+                    if button == MouseButton::Left {
+                        if state == ElementState::Pressed {
+                            self.cs_hud_edit_press();
+                        } else {
+                            self.cs_hud_edit_release();
+                        }
+                    }
+                }
+                // CS Friends invite banner: Accept / Later over any free-cursor screen.
+                WindowEvent::MouseInput {
+                    state: ElementState::Pressed,
+                    button: MouseButton::Left,
+                    ..
+                } if self.cs_invite_banner_hovered() => {
+                    self.cs_invite_banner_click();
+                }
                 WindowEvent::MouseInput { state, button, .. } if self.code_of_conduct.is_some() => {
                     if state == ElementState::Pressed && button == MouseButton::Left {
                         self.code_of_conduct_click()?;
@@ -16052,6 +16084,13 @@ impl ApplicationHandler for Game<'_> {
                             .is_some_and(|t| t.elapsed().as_millis() >= 1000)
                     {
                         self.death_confirm_answer(false)?;
+                    }
+                }
+                WindowEvent::KeyboardInput { event, .. } if self.cs_hud_edit.is_some() => {
+                    if event.state == ElementState::Pressed
+                        && event.physical_key == PhysicalKey::Code(KeyCode::Escape)
+                    {
+                        self.close_cs_hud_edit();
                     }
                 }
                 // ConfirmScreen.keyPressed: Escape answers no.
@@ -16751,6 +16790,12 @@ impl<'a> Game<'a> {
             pack_reload: None,
             server_packs: Default::default(),
             link_prompt: None,
+            cs_hud_edit: None,
+            cs_hud_layout: None,
+            cs_hud_rects: Vec::new(),
+            cs_hud_inset: (0.0, 0.0, 0.0, 0.0),
+            cs_host_blur: false,
+            cs_host_paused: false,
             code_of_conduct: None,
             dialogs: Default::default(),
             integrated_starting: None,

@@ -497,6 +497,11 @@ impl Game<'_> {
         for event in events {
             match event {
                 HostEvent::Key { token, down } => {
+                    // CS Launcher Plus commands (`cs:blur`, `cs:exit`, `cs:hud_edit`).
+                    if token.starts_with("cs:") {
+                        self.cs_host_token(&token, down);
+                        continue;
+                    }
                     // Enter / Backspace from the host's keyboard while a text field has focus
                     // (chat, commands, signs, books, search boxes, world name): the host cannot
                     // synthesize winit key events, and the custom-key path only reaches key

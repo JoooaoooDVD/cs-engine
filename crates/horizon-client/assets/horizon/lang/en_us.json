@@ -56,6 +56,8 @@
   "horizon.mods.empty": "No mods: put .hmod files in the horizon-mods folder",
   "horizon.mods.stopped": " (Stopped)",
   "horizon.mods.not_built": " (Not built)",
+  "cs.menu.hud_editor": "HUD Editor",
+  "cs.menu.exit": "Exit Game",
   "horizon.mods.native_unsupported": " (Native .hnmod - not supported)",
   "horizon.mods.dev": " (Dev)",
   "horizon.mods.settings": "Settings",

@@ -87,6 +87,9 @@ fn pause_buttons(
             2,
             true,
         ),
+        // CS Engine: the HUD Editor and a save-and-exit to the launcher.
+        (x0 + 4.0, y0 + 170.0 + down, 98.0, "cs.menu.hud_editor", 20, true),
+        (x0 + 110.0, y0 + 170.0 + down, 98.0, "cs.menu.exit", 21, true),
     ]);
     v
 }
@@ -168,6 +171,10 @@ impl Game<'_> {
         let atlas = &self.gui.atlas;
         let (w, h) = (batch.width, batch.height);
         ui::menu_background(batch, atlas, 0.0, 0.0, w, h, true);
+        if self.cs_host_blur {
+            // The launcher's control editor is over the game: only the dimmed world shows.
+            return;
+        }
         let title = Text::translate("menu.game", &[]);
         let tw = atlas.font.width_text(&title);
         batch.text_styled(
@@ -256,6 +263,9 @@ impl Game<'_> {
         let links = !self.server_links().is_empty();
         let icons = pause_icons(w, h, links);
         let friends = icons[FRIENDS_ICON];
+        if self.cs_host_blur {
+            return Ok(());
+        }
         let hit = pause_buttons(w, h, self.external_server(), links)
             .into_iter()
             .find(|b| b.5 && ui::hovered(self.cursor, b.0, b.1, b.2, 20.0))
@@ -288,6 +298,8 @@ impl Game<'_> {
             Some(12) => self.confirm_trusted_link(BUGS_LINK, Screen::Paused),
             Some(13) => self.confirm_trusted_link(feedback_link(), Screen::Paused),
             Some(2) => self.close_world()?,
+            Some(20) => self.open_cs_hud_edit(true),
+            Some(21) => self.begin_closing_save(true)?,
             _ => {}
         }
         if hit.is_some() {

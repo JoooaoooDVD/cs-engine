@@ -404,6 +404,10 @@ impl Game<'_> {
         self.cs_friends_ui.chat_text.clear();
     }
 
+    /// The invite banner's Accept (game/cs_invite_banner.rs).
+    pub(super) fn cs_join_from_banner(&mut self, address: &str) {
+        self.cs_join(address);
+    }
     /// Join a friend's world: now from the title, else once this world has closed.
     fn cs_join(&mut self, address: &str) {
         if address.is_empty() {

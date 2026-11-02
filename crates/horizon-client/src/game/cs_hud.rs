@@ -5,6 +5,7 @@
 //! [`Corners`]. The FPS and click counters are the ones `game/extras.rs` keeps
 //! for every frame; the keys are the movement keys the game reads, so touch
 //! controls and a keyboard both show.
+use super::cs_hud_edit::{Module, Placement};
 use super::{Game, Screen};
 use horizon_client::{
     extras::Corner,
@@ -26,6 +27,16 @@ impl Game<'_> {
     /// The CS HUD modules, after the minimap and before mods' panels. `visible`
     /// says whether a corner may be drawn (the debug screen owns the top left).
     pub(super) fn draw_cs_hud(&mut self, batch: &mut HudBatch, corners: &mut Corners) {
+        self.cs_hud_rects.clear();
+        // The HUD draws inside the safe margins (`inset_overlay`): the editor's hit boxes
+        // and saved fractions are relative to that inner area.
+        let (full_w, full_h) = self.gui_size();
+        let margins = self.hud_safe_margins();
+        let pad = |full: f32, margin: f32| {
+            let margin = if margin.is_finite() { margin.clamp(0.0, 0.12) } else { 0.0 };
+            (full * batch.scale * margin).round() / batch.scale
+        };
+        self.cs_hud_inset = (batch.width, batch.height, pad(full_w, margins[0]), pad(full_h, margins[1]));
         let e = &self.settings.extras;
         if !(e.fps || e.keystrokes || e.coords) {
             return;
@@ -35,8 +46,15 @@ impl Game<'_> {
             (e.keystrokes, e.keystrokes_corner, e.keystrokes_cps);
         let (coords, coords_corner) = (e.coords, e.coords_corner);
         let debug = self.debug;
-        let visible = |corner: Corner| !(debug && corner == Corner::TopLeft);
-        if fps && visible(fps_corner) {
+        let placed = |game: &mut Self, m: Module| -> Option<Placement> {
+            game.cs_hud_layout().placed.get(&m).copied()
+        };
+        // A placed module draws into a scratch corner, then moves to its place.
+        let visible = |corner: Corner, placement: Option<Placement>| {
+            placement.is_some() || !(debug && corner == Corner::TopLeft)
+        };
+        let fps_place = placed(self, Module::Fps);
+        if fps && visible(fps_corner, fps_place) {
             let (rate, min, low) = self.frame_reading();
             let color: u32 = match rate {
                 0..=24 => 0xFF5555,
@@ -46,19 +64,27 @@ impl Game<'_> {
             let line = format!("FPS: {rate}");
             let lows = format!("Min {min} · 1% low {low}");
             let atlas = &self.gui.atlas;
+            let start = batch.vertices.len();
+            let mut scratch = scratch_corners();
+            let (target, corner) = match fps_place {
+                Some(_) => (&mut scratch, Corner::TopLeft),
+                None => (&mut *corners, fps_corner),
+            };
             if fps_lows {
                 extras_hud::draw_lines(
                     batch,
                     atlas,
-                    corners,
-                    fps_corner,
+                    target,
+                    corner,
                     &[(line.as_str(), color), (lows.as_str(), 0xAAAAAA)],
                 );
             } else {
-                extras_hud::draw_lines(batch, atlas, corners, fps_corner, &[(line.as_str(), color)]);
+                extras_hud::draw_lines(batch, atlas, target, corner, &[(line.as_str(), color)]);
             }
+            self.cs_hud_place(batch, start, Module::Fps, fps_place);
         }
-        if coords && visible(coords_corner) {
+        let coords_place = placed(self, Module::Coords);
+        if coords && visible(coords_corner, coords_place) {
             if let Some(p) = self.player.as_ref().map(|p| p.position) {
                 let xyz = format!(
                     "XYZ: {} {} {}",
@@ -68,18 +94,63 @@ impl Game<'_> {
                 );
                 let facing = format!("Facing: {}", facing(self.yaw));
                 let atlas = &self.gui.atlas;
+                let start = batch.vertices.len();
+                let mut scratch = scratch_corners();
+                let (target, corner) = match coords_place {
+                    Some(_) => (&mut scratch, Corner::TopLeft),
+                    None => (&mut *corners, coords_corner),
+                };
                 extras_hud::draw_lines(
                     batch,
                     atlas,
-                    corners,
-                    coords_corner,
+                    target,
+                    corner,
                     &[(xyz.as_str(), 0xFFFFFF), (facing.as_str(), 0xAAAAAA)],
                 );
+                self.cs_hud_place(batch, start, Module::Coords, coords_place);
             }
         }
-        if keystrokes && visible(keystrokes_corner) {
-            self.draw_keystrokes(batch, corners, keystrokes_corner, cps_shown);
+        let keys_place = placed(self, Module::Keystrokes);
+        if keystrokes && visible(keystrokes_corner, keys_place) {
+            let start = batch.vertices.len();
+            let mut scratch = scratch_corners();
+            match keys_place {
+                Some(_) => self.draw_keystrokes(batch, &mut scratch, Corner::TopLeft, cps_shown),
+                None => self.draw_keystrokes(batch, corners, keystrokes_corner, cps_shown),
+            }
+            self.cs_hud_place(batch, start, Module::Keystrokes, keys_place);
         }
+    }
+
+    /// Moves what a module drew since `start` to its saved place and scale (a corner module
+    /// stays), and records its box for the HUD Editor (in the full HUD's coordinates).
+    fn cs_hud_place(&mut self, batch: &mut HudBatch, start: usize, m: Module, placement: Option<Placement>) {
+        let Some(bounds) = bounds(batch, start) else {
+            return;
+        };
+        let (iw, ih, px, py) = self.cs_hud_inset;
+        let mut rect = bounds;
+        if let Some(p) = placement {
+            let (tx, ty) = ((p.x * iw).round(), (p.y * ih).round());
+            let (dx, dy) = (tx - bounds[0], ty - bounds[1]);
+            for v in &mut batch.vertices[start..] {
+                v.pos[0] += dx;
+                v.pos[1] += dy;
+            }
+            batch.scale_since(start, tx, ty, p.scale, p.scale);
+            // Kept inside the HUD after scaling (a bigger module near an edge moves in).
+            let (sw, sh) = (bounds[2] * p.scale, bounds[3] * p.scale);
+            let fix_x = (iw - (tx + sw)).min(0.0);
+            let fix_y = (ih - (ty + sh)).min(0.0);
+            if fix_x != 0.0 || fix_y != 0.0 {
+                for v in &mut batch.vertices[start..] {
+                    v.pos[0] += fix_x;
+                    v.pos[1] += fix_y;
+                }
+            }
+            rect = [tx + fix_x, ty + fix_y, sw, sh];
+        }
+        self.cs_hud_rects.push((m, [rect[0] + px, rect[1] + py, rect[2], rect[3]]));
     }
 
     /// The classic keystrokes layout: W over A S D, the mouse buttons (with
@@ -142,6 +213,26 @@ impl Game<'_> {
         let y3 = y2 + mouse_h + GAP;
         key(batch, x0, y3, width, space_h, "Space", space);
     }
+}
+
+/// A corner set a placed module draws into first (top-left, at the margin), before it moves.
+fn scratch_corners() -> Corners {
+    Corners::new(4096.0, 4096.0, 0.0)
+}
+/// The box `[x, y, w, h]` of the quads pushed since `start`, if any.
+fn bounds(batch: &HudBatch, start: usize) -> Option<[f32; 4]> {
+    let vertices = &batch.vertices[start..];
+    if vertices.is_empty() {
+        return None;
+    }
+    let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    for v in vertices {
+        x0 = x0.min(v.pos[0]);
+        y0 = y0.min(v.pos[1]);
+        x1 = x1.max(v.pos[0]);
+        y1 = y1.max(v.pos[1]);
+    }
+    Some([x0, y0, x1 - x0, y1 - y0])
 }
 
 /// `Direction.fromYRot` as the debug screen names it, with the axis it moves along.
