@@ -303,3 +303,34 @@ in the control-button editor, (3) touch across devices (diagnostics from Round 7
   shows; world/typing → hides; independent of the manual Mouse button; preference
   `vmouse_auto_menus`), double-tap-and-hold drag, options tap-to-click / two-finger right click / drag,
   in-game "Mouse & touch settings" (cursor speed, size, the toggles — live + persisted). 9 unit tests.
+
+### Rounds 73–76 — Touch/mouse iterations (launcher)
+* Touchpad mode, auto-cursor-in-menus and direct-tap-in-menus were tried; the user's verdict in
+  Round 79: cursor must behave **exactly like PojavLauncher**. The experimental modes and their
+  settings were removed again (Round 79); `InGUIEventProcessor` is back to Pojav semantics.
+
+### Rounds 77–78 — Friends without VPN: e4mc public address, server branding, hotbar tap (engine)
+* Open to LAN publishes the world through e4mc (`xxxx.e4mc.link`, QUIC relay, cross-play with Java
+  guests); IPv6-only / NAT64 (Jio) fixed (61945408d). `/publish` command and the e4mc section.
+* `cs-server.json` (`{"motd": "...", "icon": "cs-server-icon.png"}`) + 64×64 PNG → MOTD and favicon
+  in friends' server lists. Hotbar tap selects the slot on touch.
+
+### Round 79 — CS Friends inside the engine (fork a4c90338b)
+* Decision: the whole friends system lives **in-game** (CS Engine); the launcher has no Friends UI
+  (Round 78's launcher page removed). The launcher only forwards engine notices as system
+  notifications (`nativeHostNotice`) and writes the default server icon.
+* `horizon-client::cs_friends`: worker-thread client for the Supabase RPCs (`cs_register`,
+  `cs_sync` heartbeat+messages every 8 s / 3 s with chat open, `cs_add_friend`, `cs_respond`,
+  `cs_remove_friend`, `cs_invite`, `cs_send`). Identity = random token in
+  `<launcher home>/cs-friends-identity.json` (hashed server-side); friend code `CS-XXXXXX`.
+* Screen (`cs_friends_screen` + `game/cs_friends_ui`): Friends button (pause menu icon, title
+  button) → tabs **Friends** (your code + Copy, add by code, requests Accept/Decline, friends with
+  status · Join when they host · Invite when you host · Chat · remove with confirm), **Chat**
+  (one-to-one, unread counts, Enter sends), **Host** (Publish World / Copy Address / Invite All /
+  Stop; MOTD field and icon choice CS Launcher / world icon / custom file — saved to
+  `cs-server.json` and applied live via `lan::Shared::set_motd/set_favicon`).
+* Invites/requests/messages → chat line `[Friends] …`, a system toast, and a launcher notification.
+  Join from the title connects at once; in a world the world closes first, then connects.
+* Text input works from the Android keyboard (OSK route), IME commit and hardware keys; Escape/Back
+  steps out field → conversation → screen.
+* Not done: group chat, voice, block list, friend nicknames; invites expire after 10 min server-side.
