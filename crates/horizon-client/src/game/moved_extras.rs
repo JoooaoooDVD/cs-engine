@@ -33,6 +33,11 @@ mod with_mods {
         /// At start: remembers the moved extras that were off, and installs
         /// the ones that were on, in the background.
         pub(in crate::game) fn start_moved_extras(&mut self) {
+            // CS Engine draws the FPS counter and keystrokes itself (game/cs_hud.rs):
+            // nothing moves to native mods, which a prebuilt engine cannot run.
+            if horizon_client::android_runtime::host_mode() {
+                return;
+            }
             let off = moved_extras::nothing_to_do(&self.settings.extras);
             let pending = moved_extras::pending(&self.settings.extras);
             if off.is_empty() && pending.is_empty() {

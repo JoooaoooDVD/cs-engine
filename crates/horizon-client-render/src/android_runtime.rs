@@ -356,6 +356,15 @@ pub fn host_take_notice() -> Option<String> {
         Some(notices.remove(0))
     }
 }
+/// The title's Customize button (CS Engine skin panel): the host opens its Skin &
+/// Cape dialog once; `host_take_skin_request` hands the request over.
+static HOST_SKIN_REQUEST: AtomicBool = AtomicBool::new(false);
+pub fn host_request_skin() {
+    HOST_SKIN_REQUEST.store(true, Ordering::Relaxed);
+}
+pub fn host_take_skin_request() -> bool {
+    HOST_SKIN_REQUEST.swap(false, Ordering::Relaxed)
+}
 /// Game asked for a text editor (chat, sign, field): the host shows its keyboard.
 pub fn host_set_keyboard(wanted: bool) {
     HOST_KEYBOARD.store(wanted, Ordering::Relaxed);

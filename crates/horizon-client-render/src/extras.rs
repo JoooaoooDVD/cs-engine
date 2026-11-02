@@ -53,6 +53,12 @@ impl Corner {
     pub fn top(self) -> bool {
         matches!(self, Corner::TopLeft | Corner::TopRight)
     }
+    /// The corner after (or, `back`, before) this one in `ALL`.
+    pub fn next(self, back: bool) -> Corner {
+        let i = Self::ALL.iter().position(|c| *c == self).unwrap_or(0);
+        let n = Self::ALL.len();
+        Self::ALL[if back { (i + n - 1) % n } else { (i + 1) % n }]
+    }
     pub fn left(self) -> bool {
         matches!(self, Corner::TopLeft | Corner::BottomLeft)
     }
@@ -83,6 +89,9 @@ pub struct Extras {
     pub keystrokes_corner: Corner,
     /// Clicks per second under the mouse buttons.
     pub keystrokes_cps: bool,
+    /// CS HUD modules (CS Engine): the coordinates panel, XYZ and facing.
+    pub coords: bool,
+    pub coords_corner: Corner,
     /// The official mods installed for the extras they replace, by mod id
     /// (`movedToMods`): each is done once.
     pub moved: Vec<String>,
@@ -131,6 +140,8 @@ impl Default for Extras {
             keystrokes: false,
             keystrokes_corner: Corner::TopLeft,
             keystrokes_cps: true,
+            coords: false,
+            coords_corner: Corner::TopLeft,
             moved: Vec::new(),
             minimap: false,
             minimap_corner: Corner::TopRight,
@@ -191,6 +202,8 @@ impl Extras {
                     e.keystrokes_corner = Corner::parse(value, e.keystrokes_corner)
                 }
                 "keystrokesCps" => e.keystrokes_cps = flag(e.keystrokes_cps),
+                "coords" => e.coords = flag(e.coords),
+                "coordsCorner" => e.coords_corner = Corner::parse(value, e.coords_corner),
                 "movedToMods" => {
                     e.moved = value
                         .split(',')
@@ -229,7 +242,7 @@ impl Extras {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "fullbright:{}\ndynamicLights:{}\nzoom:{}\nzoomKey:{}\nzoomLevel:{}\nzoomSmooth:{}\nzoomSensitivity:{}\nfps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\nmovedToMods:{}\nminimap:{}\nminimapCorner:{}\nminimapSize:{}\nminimapShape:{}\nminimapZoom:{}\nminimapRotate:{}\nautoReconnect:{}\nownNameTag:{}\nmouseTweaks:{}\nmouseTweaksWheel:{}\nsort:{}\nsortKey:{}\n{}:{}\nagentControl:{}\ndiscordPresence:{}\n",
+            "fullbright:{}\ndynamicLights:{}\nzoom:{}\nzoomKey:{}\nzoomLevel:{}\nzoomSmooth:{}\nzoomSensitivity:{}\nfps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\ncoords:{}\ncoordsCorner:{}\nmovedToMods:{}\nminimap:{}\nminimapCorner:{}\nminimapSize:{}\nminimapShape:{}\nminimapZoom:{}\nminimapRotate:{}\nautoReconnect:{}\nownNameTag:{}\nmouseTweaks:{}\nmouseTweaksWheel:{}\nsort:{}\nsortKey:{}\n{}:{}\nagentControl:{}\ndiscordPresence:{}\n",
             bool_text(self.fullbright),
             bool_text(self.dynamic_lights),
             bool_text(self.zoom),
@@ -243,6 +256,8 @@ impl Extras {
             bool_text(self.keystrokes),
             self.keystrokes_corner.name(),
             bool_text(self.keystrokes_cps),
+            bool_text(self.coords),
+            self.coords_corner.name(),
             self.moved.join(","),
             bool_text(self.minimap),
             self.minimap_corner.name(),
@@ -381,6 +396,15 @@ impl Cps {
 /// The settings the Extras page shows, one per row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Item {
+    /// CS HUD modules (CS Engine, built in): the FPS counter, keystrokes and coordinates.
+    Fps,
+    FpsCorner,
+    FpsLows,
+    Keystrokes,
+    KeystrokesCorner,
+    KeystrokesCps,
+    Coords,
+    CoordsCorner,
     Fullbright,
     DynamicLights,
     OwnNameTag,
@@ -399,6 +423,15 @@ pub enum Item {
 pub fn rows() -> Vec<Result<Item, &'static str>> {
     use Item::*;
     vec![
+        Err("CS HUD modules"),
+        Ok(Fps),
+        Ok(FpsCorner),
+        Ok(FpsLows),
+        Ok(Keystrokes),
+        Ok(KeystrokesCorner),
+        Ok(KeystrokesCps),
+        Ok(Coords),
+        Ok(CoordsCorner),
         Err("Lighting"),
         Ok(Fullbright),
         Ok(DynamicLights),
@@ -416,6 +449,14 @@ pub fn rows() -> Vec<Result<Item, &'static str>> {
 impl Item {
     pub fn caption(self) -> &'static str {
         match self {
+            Item::Fps => "FPS counter",
+            Item::FpsCorner => "FPS corner",
+            Item::FpsLows => "Min and 1% low",
+            Item::Keystrokes => "Keystrokes",
+            Item::KeystrokesCorner => "Keystrokes corner",
+            Item::KeystrokesCps => "Clicks per second",
+            Item::Coords => "Coordinates",
+            Item::CoordsCorner => "Coordinates corner",
             Item::Fullbright => "Fullbright",
             Item::DynamicLights => "Dynamic lights",
             Item::OwnNameTag => "Own name tag",
@@ -433,9 +474,12 @@ impl Item {
     pub fn parent(self) -> Option<Item> {
         use Item::*;
         Some(match self {
+            FpsCorner | FpsLows => Fps,
+            KeystrokesCorner | KeystrokesCps => Keystrokes,
+            CoordsCorner => Coords,
             MouseTweaksWheel => MouseTweaks,
             SortKey => Sort,
-            Fullbright | DynamicLights | OwnNameTag | MouseTweaks | Sort | AutoReconnect | NoAi
+            Fps | Keystrokes | Coords | Fullbright | DynamicLights | OwnNameTag | MouseTweaks | Sort | AutoReconnect | NoAi
             | AgentControl | DiscordPresence => {
                 return None;
             }
@@ -444,6 +488,16 @@ impl Item {
     /// What the row says under its caption.
     pub fn description(self) -> &'static str {
         match self {
+            Item::Fps => "Shows the frames per second in a corner of the screen while you play.",
+            Item::FpsCorner => "Which corner of the screen the FPS counter sits in.",
+            Item::FpsLows => "Also shows the lowest and the 1% low frame rate of the last five seconds.",
+            Item::Keystrokes => {
+                "Shows your movement keys, jump and mouse buttons as they are pressed, like keystroke mods do. Touch controls count too."
+            }
+            Item::KeystrokesCorner => "Which corner of the screen the keystrokes sit in.",
+            Item::KeystrokesCps => "Shows the clicks per second under the mouse buttons.",
+            Item::Coords => "Shows your X, Y, Z position and the direction you face.",
+            Item::CoordsCorner => "Which corner of the screen the coordinates sit in.",
             Item::Fullbright => "Show blocks and entities at full light, even in dark areas.",
             Item::DynamicLights => {
                 "Torches and other light sources held, dropped or on fire light the blocks around them."
@@ -481,6 +535,7 @@ impl Item {
     pub fn cost(self) -> Option<crate::graphics_style::Cost> {
         use crate::graphics_style::Cost;
         match self {
+            Item::Fps | Item::Keystrokes | Item::Coords => Some(Cost::None),
             Item::Fullbright => Some(Cost::None),
             Item::DynamicLights => Some(Cost::Low),
             Item::OwnNameTag | Item::AutoReconnect | Item::MouseTweaks | Item::Sort => {
@@ -492,6 +547,11 @@ impl Item {
     /// On/off items and their value.
     pub fn switch(self, e: &Extras) -> Option<bool> {
         Some(match self {
+            Item::Fps => e.fps,
+            Item::FpsLows => e.fps_lows,
+            Item::Keystrokes => e.keystrokes,
+            Item::KeystrokesCps => e.keystrokes_cps,
+            Item::Coords => e.coords,
             Item::Fullbright => e.fullbright,
             Item::DynamicLights => e.dynamic_lights,
             Item::OwnNameTag => e.own_name_tag,
@@ -508,6 +568,9 @@ impl Item {
     /// The value of the other items, as their button shows it.
     pub fn value(self, e: &Extras) -> String {
         match self {
+            Item::FpsCorner => e.fps_corner.label().into(),
+            Item::KeystrokesCorner => e.keystrokes_corner.label().into(),
+            Item::CoordsCorner => e.coords_corner.label().into(),
             Item::SortKey => crate::keybinds::display_name(&e.sort_key).plain(),
             other => match other.switch(e) {
                 Some(true) => "On".into(),
@@ -517,8 +580,16 @@ impl Item {
     }
     /// A click (`_back` for the right button: every item left is a switch,
     /// so both flip it). The sort key binds instead.
-    pub fn cycle(self, e: &mut Extras, _back: bool) {
+    pub fn cycle(self, e: &mut Extras, back: bool) {
         match self {
+            Item::Fps => e.fps = !e.fps,
+            Item::FpsCorner => e.fps_corner = e.fps_corner.next(back),
+            Item::FpsLows => e.fps_lows = !e.fps_lows,
+            Item::Keystrokes => e.keystrokes = !e.keystrokes,
+            Item::KeystrokesCorner => e.keystrokes_corner = e.keystrokes_corner.next(back),
+            Item::KeystrokesCps => e.keystrokes_cps = !e.keystrokes_cps,
+            Item::Coords => e.coords = !e.coords,
+            Item::CoordsCorner => e.coords_corner = e.coords_corner.next(back),
             Item::Fullbright => e.fullbright = !e.fullbright,
             Item::DynamicLights => e.dynamic_lights = !e.dynamic_lights,
             Item::OwnNameTag => e.own_name_tag = !e.own_name_tag,

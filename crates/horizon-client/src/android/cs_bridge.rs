@@ -737,5 +737,8 @@ pub extern "system" fn Java_com_craftstudio_cslauncher_engine_horizon_HorizonNat
     if horizon_client::android_runtime::host_keyboard() {
         flags |= 2;
     }
+    if horizon_client::android_runtime::host_take_skin_request() {
+        flags |= 4;
+    }
     flags
 }

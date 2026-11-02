@@ -101,6 +101,7 @@ mod dispenser;
 mod dragon;
 mod dynamic_lights;
 mod cs_friends_ui;
+mod cs_hud;
 mod e4mc_friends;
 mod enchant_effects;
 mod end;
@@ -10676,6 +10677,13 @@ impl Game<'_> {
         match action {
             Action::Quit => crate::game::exit_app(event_loop),
             Action::Friends => self.open_cs_friends(),
+            Action::Customize => {
+                if horizon_client::android_runtime::host_mode() {
+                    horizon_client::android_runtime::host_request_skin();
+                } else {
+                    self.open_options(true);
+                }
+            }
             Action::Options => self.open_options(true),
             Action::Accessibility => {
                 self.open_options_at(true, horizon_client::options_ui::Page::Accessibility)
