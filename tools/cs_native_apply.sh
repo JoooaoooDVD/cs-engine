@@ -46,4 +46,4 @@ for dirpath, dirs, files in os.walk(stage):
 print(f'cs_native_apply: {changed} file(s) changed by the mixins')
 PY
 rm -rf "$STAGE"
-cp "$MODS/cs-native-mods.json" cs-native-mods.json
+cp "$(dirname "$MODS")/cs-native-mods.json" cs-native-mods.json

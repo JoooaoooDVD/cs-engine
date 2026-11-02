@@ -53,15 +53,27 @@ def main():
         for name in z.namelist():
             if name.startswith("/") or ".." in name.split("/"):
                 sys.exit(f"cs_native_mods: {id_}: bad entry {name}")
-        z.extractall(dest)
-        for toml in dest.glob("mixins/*/horizon-mixin.toml"):
+        # horizon-mixins reads `<mods>/<bundle>/horizon-mixin.toml`: the bundle is the zip's
+        # `mixins/<id>/` folder (the launcher does the same), its horizon-native.json kept beside.
+        tmp = out / f".{id_}.unpack"
+        if tmp.exists():
+            import shutil
+            shutil.rmtree(tmp)
+        z.extractall(tmp)
+        bundles = list((tmp / "mixins").glob("*/horizon-mixin.toml")) if (tmp / "mixins").is_dir() else []
+        if len(bundles) != 1:
+            sys.exit(f"cs_native_mods: {id_}: expected one mixins/<id>/horizon-mixin.toml, found {len(bundles)}")
+        bundles[0].parent.rename(dest)
+        import shutil
+        shutil.rmtree(tmp)
+        for toml in dest.glob("horizon-mixin.toml"):
             text = toml.read_text()
             text = re.sub(r'(?m)^horizon_revision\s*=\s*"[0-9a-f]+"', f'horizon_revision = "{revision}"', text)
             toml.write_text(text)
         built.append({"id": id_, "version": v["version"], "name": p["name"], "hooks": hooks,
                       "license": p.get("license"), "source": p.get("source"), "sha256": f["sha256"]})
         print(f"cs_native_mods: {id_} {v['version']} (hooks {hooks})")
-    (out / "cs-native-mods.json").write_text(json.dumps(built, indent=2))
+    (out.parent / "cs-native-mods.json").write_text(json.dumps(built, indent=2))
 
 
 if __name__ == "__main__":
