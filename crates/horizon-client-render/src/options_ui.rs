@@ -2314,6 +2314,10 @@ impl OptionsUi {
                             .append(on_off(s.mods.is_on(i)));
                         if installed.problem.as_deref() == Some(crate::mod_list::NOT_BUILT) {
                             label = label.append(tr("horizon.mods.not_built"));
+                        } else if installed.problem.as_deref()
+                            == Some(crate::mod_list::NATIVE_UNSUPPORTED)
+                        {
+                            label = label.append(tr("horizon.mods.native_unsupported"));
                         } else if installed.problem.is_some() {
                             label = label.append(tr("horizon.mods.stopped"));
                         } else if installed.dev {

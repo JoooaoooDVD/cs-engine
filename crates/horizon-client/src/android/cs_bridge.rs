@@ -171,6 +171,20 @@ fn stage_engine_data(source: &str, home: &Path) -> std::io::Result<()> {
     std::fs::rename(partial, target)
 }
 
+/// A short, stable folder name for a profile's overlay cache (FNV-1a of its path).
+fn overlay_key(game_home: &std::path::Path) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in game_home.to_string_lossy().bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    let name = game_home
+        .file_name()
+        .map(|n| n.to_string_lossy().chars().filter(|c| c.is_ascii_alphanumeric()).take(24).collect::<String>())
+        .unwrap_or_default();
+    format!("{name}-{hash:016x}")
+}
+
 fn write_exit(home: &Path, error: Option<&str>) {
     let (pushed, processed) = horizon_client::android_runtime::host_stats();
     let geometry = horizon_client::android_runtime::host_geometry().map(|g| {
@@ -221,6 +235,11 @@ pub fn run(app: AndroidApp, launch: Launch) {
     };
     let _ = std::fs::create_dir_all(&cache);
     horizon_client::android_runtime::configure_cache_dir(cache.clone());
+    // Overlay roots (resource packs, content mods) need symlinks: internal storage, one
+    // folder per profile.
+    let overlay = home.join("overlay").join(overlay_key(&game_home));
+    let _ = std::fs::create_dir_all(&overlay);
+    horizon_client::android_runtime::configure_overlay_dir(overlay);
     horizon_client::official_install::configure_download_cache_dir(cache);
     horizon_client::android_runtime::install_clipboard(
         horizon_client::android_runtime::ClipboardHooks {

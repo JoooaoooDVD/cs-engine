@@ -231,7 +231,9 @@ pub(super) fn content_root(
             Err(e) => log::warn!("Horizon: mod {} content not loaded: {e}", m.id),
         }
     }
-    match mod_content::resource_root(root, &mods, &here.join(".horizon-cache")) {
+    let cache = horizon_client::android_runtime::overlay_dir()
+        .map_or_else(|| here.join(".horizon-cache"), std::path::Path::to_path_buf);
+    match mod_content::resource_root(root, &mods, &cache) {
         Ok(out) => {
             if out != root {
                 log::info!(
@@ -401,6 +403,43 @@ impl Game<'_> {
             })
             .collect();
         self.list_native_mods();
+        self.list_unsupported_native_mods();
+    }
+    /// CS Engine: `.hnmod` files dropped into the mods folder are listed with a clear
+    /// reason instead of vanishing silently (upstream lists them only in its own launcher).
+    fn list_unsupported_native_mods(&mut self) {
+        let dir = std::env::current_dir()
+            .unwrap_or_default()
+            .join(mod_list::DIR);
+        let mut paths: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .map(|d| d.flatten().map(|e| e.path()).collect())
+            .unwrap_or_default();
+        paths.retain(|p| p.extension().is_some_and(|e| e == "hnmod"));
+        paths.sort();
+        for path in paths {
+            let file = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            let (id, title) = match horizon_mods::index::native::Bundle::read(&path) {
+                Ok(bundle) => {
+                    let m = bundle.manifest;
+                    (m.id.clone(), format!("{} {}", m.id, m.version))
+                }
+                Err(_) => (String::new(), file.clone()),
+            };
+            let listed = !id.is_empty() && self.settings.mods.installed.iter().any(|r| r.id == id);
+            if listed {
+                continue;
+            }
+            log::warn!("Horizon: {file}: native mod (.hnmod) cannot be loaded by CS Engine");
+            self.settings.mods.installed.push(Installed {
+                id: String::new(),
+                title,
+                description: String::new(),
+                problem: Some(mod_list::NATIVE_UNSUPPORTED.to_owned()),
+                dev: false,
+                has_settings: false,
+                native: None,
+            });
+        }
     }
     /// The chat's tree after the running mods changed.
     fn sync_mod_commands(&mut self) {

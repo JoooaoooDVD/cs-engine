@@ -13,6 +13,17 @@ pub fn configure_cache_dir(path: std::path::PathBuf) {
 pub(crate) fn cache_dir() -> Option<&'static std::path::Path> {
     CACHE_DIR.get().map(std::path::PathBuf::as_path)
 }
+/// CS Engine: where resource-pack and content-mod overlay roots are built. The game's
+/// working directory (the profile) may live on external/FUSE storage, where `symlink()`
+/// fails with EPERM and every pack reload failed; the launcher points this at internal
+/// storage instead (`cs_bridge`). Unset: beside options.txt, as upstream.
+static OVERLAY_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+pub fn configure_overlay_dir(path: std::path::PathBuf) {
+    let _ = OVERLAY_DIR.set(path);
+}
+pub fn overlay_dir() -> Option<&'static std::path::Path> {
+    OVERLAY_DIR.get().map(std::path::PathBuf::as_path)
+}
 static INPUT_MODE: std::sync::Mutex<(InputMode, InputMode)> =
     std::sync::Mutex::new((InputMode::Auto, InputMode::Touch));
 static GAMEPADS: std::sync::LazyLock<std::sync::Mutex<Devices>> =

@@ -67,6 +67,7 @@ impl Game<'_> {
             let started = std::time::Instant::now();
             // A pack is not the game's own code: one that makes the shader compiler (or our
             // translation of it) panic is turned off instead of crashing every world load (#3525).
+            let mut open_error: Option<String> = None;
             let loaded = horizon_client::crash::contain(|| {
                 match Pack::open(&path) {
                     Ok(pack) => {
@@ -140,12 +141,20 @@ impl Game<'_> {
                     Err(e) => {
                         self.pack_ids = None;
                         log::warn!("shader pack {name}: {e}");
+                        open_error = Some(e.to_string());
                         renderer.set_shader_pack(dimension, None, &[]);
                     }
                 }
             });
             if let Err(panic) = loaded {
                 self.shader_pack_failed(name, dimension, &panic);
+            } else if let Some(e) = open_error {
+                // CS Engine: a pack that does not open (not a zip, no shaders folder) used to
+                // fail only in the log; the player sees why nothing changed.
+                self.system_message(Text::colored(
+                    format!("Shader pack {name} could not be opened: {e}"),
+                    0xFF5555,
+                ));
             }
         }
         let lerp = |(old, new): (f32, f32)| old + (new - old) * partial;
