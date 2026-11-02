@@ -1,0 +1,17 @@
+# CS Engine: native mods (.hnmod, horizon-rust/horizon-mods registry) compiled into every
+# CS Engine build by tools/cs_native_apply.sh (horizon-mixins, MIT, levzzz5154).
+# One registry id per line; the newest published version is used. Only mods that hook the
+# stable native hook points ("hooks" in horizon-native.json) belong here.
+zoom
+fps_overlay
+keystrokes
+minimap
+coords_hud
+armor_status
+status_effect_hud
+toggle_sprint
+appleskin_horizon
+crosshair_indicator
+fullbright_horizon
+light_overlay
+inventory_profiles

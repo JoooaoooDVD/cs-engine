@@ -54,6 +54,14 @@ jobs:
         with:
           shared-key: cs-engine-arm64
           workspaces: ". -> .local/ci-target"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/horizon-mixins
+            ~/.cargo/.horizon-mixins-rev
+          key: horizon-mixins-4342a0bfbe71d4d14185528d64e496d6022f16a1
+      - name: Compile native mods in (horizon-mixins)
+        run: bash tools/cs_native_apply.sh
       - name: cargo check (cs-host)
         run: python3 tools/android_build.py --abi arm64-v8a --check --public --cs-host --sdk "$ANDROID_HOME" --java-home "$JAVA_HOME_17_X64"
 
@@ -107,6 +115,16 @@ jobs:
         with:
           shared-key: cs-engine-${{ matrix.abi }}
           workspaces: ". -> .local/ci-target"
+      - uses: actions/cache@v4
+        if: steps.want.outputs.build == '1'
+        with:
+          path: |
+            ~/.cargo/bin/horizon-mixins
+            ~/.cargo/.horizon-mixins-rev
+          key: horizon-mixins-4342a0bfbe71d4d14185528d64e496d6022f16a1
+      - name: Compile native mods in (horizon-mixins)
+        if: steps.want.outputs.build == '1'
+        run: bash tools/cs_native_apply.sh
       - name: Build libcs_engine.so (cs-host)
         if: steps.want.outputs.build == '1'
         env:
@@ -128,6 +146,7 @@ jobs:
           "$NDK/llvm-strip" --strip-unneeded "out/${{ matrix.abi }}/libcs_engine.so"
           "$NDK/llvm-readelf" -h "out/${{ matrix.abi }}/libcs_engine.so" | grep -E "Class|Machine"
           "$NDK/llvm-nm" -D "out/${{ matrix.abi }}/libcs_engine.so" | grep -cE "ANativeActivity_onCreate|Java_com_craftstudio_cslauncher_engine_horizon_HorizonNative_nativeInstall|Java_com_craftstudio_cslauncher_engine_horizon_HorizonNative_nativeHostSkin" | grep -qx 3 || { echo "::error::bridge symbols missing"; exit 1; }
+          cp cs-native-mods.json "out/${{ matrix.abi }}/" 2>/dev/null || true
           ls -l "out/${{ matrix.abi }}" symbols
       - uses: actions/upload-artifact@v4
         if: steps.want.outputs.build == '1'
@@ -135,6 +154,7 @@ jobs:
           name: horizon-${{ matrix.abi }}
           path: |
             out/${{ matrix.abi }}/libcs_engine.so
+            out/${{ matrix.abi }}/cs-native-mods.json
             symbols/*.debug
           if-no-files-found: error
 
@@ -192,6 +212,7 @@ jobs:
             fi
           done
           cp artifacts/horizon-engine-data/engine-data.zip release/
+          cp artifacts/horizon-arm64-v8a/out/arm64-v8a/cs-native-mods.json release/ 2>/dev/null || true
           cp artifacts/horizon-engine-data/LICENSE.txt artifacts/horizon-engine-data/THIRD_PARTY_NOTICES.md release/
           VERSION=$(grep -oP "versionName '\K[^']+" packaging/android/build.gradle | head -1)
           (cd release && sha256sum * > SHA256SUMS.txt)

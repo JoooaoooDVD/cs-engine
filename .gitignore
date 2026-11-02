@@ -56,3 +56,7 @@
 
 # Local artwork workspace and original reference images.
 /art/
+
+.horizon-revision
+cs-native-mods.json
+.horizon-mixins-stage.json
