@@ -2857,7 +2857,7 @@ mod tests {
 /// The MOTD and favicon of the world opened to LAN, as CS Launcher Plus configures
 /// them: `cs-server.json` (`{"motd": "...", "icon": "file.png"}`) and
 /// `cs-server-icon.png` in the game folder. Without them vanilla's MOTD and no icon.
-fn cs_server_branding(default_motd: &str, name: &str, world: &str) -> (String, Option<Vec<u8>>) {
+pub(super) fn cs_server_branding(default_motd: &str, name: &str, world: &str) -> (String, Option<Vec<u8>>) {
     let dir = std::env::current_dir().unwrap_or_default();
     let mut motd = default_motd.to_owned();
     let mut icon = dir.join("cs-server-icon.png");

@@ -163,7 +163,8 @@ impl Game<'_> {
         self.remote.is_some() && self.integrated.is_none()
     }
     pub(super) fn draw_pause_menu(&mut self, batch: &mut HudBatch) {
-        let friends = self.friends_view().shown;
+        // CS Friends: chat, invites and Join work on servers too.
+        let friends = true;
         let atlas = &self.gui.atlas;
         let (w, h) = (batch.width, batch.height);
         ui::menu_background(batch, atlas, 0.0, 0.0, w, h, true);
@@ -204,7 +205,7 @@ impl Game<'_> {
             // control socket's widget tree.
             if i == FRIENDS_ICON {
                 horizon_client::widgets::record(
-                    horizon_client::friends_screen::TITLE,
+                    horizon_client::cs_friends_screen::TITLE,
                     [x, y, 20.0, 20.0],
                     active,
                 );
@@ -226,7 +227,7 @@ impl Game<'_> {
             batch.sprite_scaled(atlas, sprite, x + 3.0, y + 3.0, 15.0, 15.0, u32::MAX);
             if hover {
                 tooltip = Some(if i == FRIENDS_ICON {
-                    Text::literal(horizon_client::friends_screen::TITLE)
+                    Text::literal(horizon_client::cs_friends_screen::TITLE)
                 } else {
                     Text::translate(ICON_LABELS[i], &[])
                 });
@@ -266,9 +267,7 @@ impl Game<'_> {
                     .map(|i| 12 + i as u8)
             })
             .or_else(|| {
-                (self.friends_view().shown
-                    && ui::hovered(self.cursor, friends.0, friends.1, 20.0, 20.0))
-                .then_some(10)
+                ui::hovered(self.cursor, friends.0, friends.1, 20.0, 20.0).then_some(10)
             });
         match hit {
             Some(0) => {
@@ -279,7 +278,7 @@ impl Game<'_> {
             Some(3) => self.open_stats(),
             Some(4) => self.open_advancements(true),
             Some(9) => self.open_world_options(),
-            Some(10) => self.screen = Screen::Friends,
+            Some(10) => self.open_cs_friends(),
             // DialogConnectionAccess.openDialog(Dialogs.SERVER_LINKS).
             Some(11) => {
                 self.links_ui.scroll = 0.0;

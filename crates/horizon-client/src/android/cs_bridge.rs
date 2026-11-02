@@ -234,6 +234,7 @@ pub fn run(app: AndroidApp, launch: Launch) {
         std::process::exit(2);
     }
     horizon_client::crash::install(home.clone(), "client");
+    horizon_client::cs_friends::configure_dir(home.clone());
     crate::exit_reports::install(&home);
     let _ = std::fs::remove_file(home.join("android-error.txt"));
     let _ = std::fs::remove_file(home.join(EXIT_FILE));
@@ -712,6 +713,15 @@ pub extern "system" fn Java_com_craftstudio_cslauncher_engine_horizon_HorizonNat
     _class: JClass<'l>,
 ) -> jstring {
     jstring_result(&mut env, horizon_client::android_runtime::host_published())
+}
+
+/// The next CS Friends notice (`title\ntext`) for a system notification, else null.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_craftstudio_cslauncher_engine_horizon_HorizonNative_nativeHostNotice<'l>(
+    mut env: JNIEnv<'l>,
+    _class: JClass<'l>,
+) -> jstring {
+    jstring_result(&mut env, horizon_client::android_runtime::host_take_notice())
 }
 
 /// Bit 0: the game wants the pointer captured (world view); bit 1: it asked for a text keyboard.

@@ -75,6 +75,7 @@ impl ServerPackState {
             .filter_map(|n| n.toast.as_ref())
             .chain(self.load_fail.as_ref())
             .chain(self.chunk_io.iter().flatten())
+            .chain(self.cs_toast.as_ref())
             .filter_map(|t| t.slot)
     }
 }
@@ -99,6 +100,8 @@ pub(super) struct ServerPackState {
     /// `SystemToastId.LOW_DISK_SPACE`, `CHUNK_LOAD_FAILURE` and `CHUNK_SAVE_FAILURE`:
     /// the toasts the integrated server's chunk IO reports add (`chunk_io`).
     pub(super) chunk_io: [Option<SystemToast>; 3],
+    /// CS Friends: the invite / request / message toast (`SystemToast.addOrUpdate`).
+    pub(super) cs_toast: Option<SystemToast>,
 }
 /// `DownloadedPackSource.createDownloadNotifier`: one batch's progress in its
 /// own `SystemToast`.
@@ -504,6 +507,7 @@ impl Game<'_> {
             .map(|n| &mut n.toast)
             .chain(std::iter::once(&mut packs.load_fail))
             .chain(packs.chunk_io.iter_mut())
+            .chain(std::iter::once(&mut packs.cs_toast))
         {
             let Some(toast) = slot_toast else {
                 continue;

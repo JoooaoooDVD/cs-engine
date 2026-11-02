@@ -905,6 +905,7 @@ impl Game<'_> {
             || self.station_typing()
             || self.mod_browser_typing()
             || self.dialog_open()
+            || self.cs_friends_typing()
     }
 
     /// Open the on-screen keyboard over the focused field: Horizon's, or
@@ -966,6 +967,8 @@ impl Game<'_> {
             if let Err(error) = self.dialog_key(key.unwrap_or(KeyCode::Space), None, text) {
                 log::warn!("Dialog keyboard: {error}");
             }
+        } else if self.cs_friends_typing() {
+            self.cs_friends_input(key, text);
         } else if self.screen == Screen::BlockEditor {
             self.block_editor_ime(key, text);
         } else if self.screen == Screen::CommandBlock {

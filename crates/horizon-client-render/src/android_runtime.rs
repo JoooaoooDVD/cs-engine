@@ -311,6 +311,23 @@ pub fn host_note_published(address: Option<&str>) {
 pub fn host_published() -> Option<String> {
     HOST_PUBLISHED.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
+/// CS Friends notices for the launcher's system notifications (`title\ntext`),
+/// oldest first; the launcher polls them one at a time.
+static HOST_NOTICES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+pub fn host_push_notice(title: &str, text: &str) {
+    let mut notices = HOST_NOTICES.lock().unwrap_or_else(|e| e.into_inner());
+    if notices.len() < 32 {
+        notices.push(format!("{title}\n{text}"));
+    }
+}
+pub fn host_take_notice() -> Option<String> {
+    let mut notices = HOST_NOTICES.lock().unwrap_or_else(|e| e.into_inner());
+    if notices.is_empty() {
+        None
+    } else {
+        Some(notices.remove(0))
+    }
+}
 /// Game asked for a text editor (chat, sign, field): the host shows its keyboard.
 pub fn host_set_keyboard(wanted: bool) {
     HOST_KEYBOARD.store(wanted, Ordering::Relaxed);

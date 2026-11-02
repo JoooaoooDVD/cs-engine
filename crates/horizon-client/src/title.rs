@@ -349,6 +349,8 @@ pub enum Mode {
 pub enum Action {
     None,
     Quit,
+    /// CS Friends (CS Launcher Plus): the title's Friends button.
+    Friends,
     Options,
     Accessibility,
     Language,
@@ -2752,10 +2754,7 @@ impl Title {
                 }
                 crate::multiplayer::Outcome::None => Action::None,
             },
-            (Mode::Main, Some(5)) => {
-                self.mode = Mode::Multiplayer(crate::multiplayer::Screen::friend());
-                Action::None
-            }
+            (Mode::Main, Some(5)) => Action::Friends,
             (Mode::Onboarding(_), Some(onboarding::SOUNDS)) => Action::Sounds,
             (Mode::Onboarding(_), Some(onboarding::ACCESSIBILITY)) => Action::Accessibility,
             (Mode::Onboarding(_), Some(onboarding::LANGUAGE)) => Action::Language,
@@ -3546,18 +3545,12 @@ mod classic_tests {
                 assert_eq!(
                     title.click(x + 10.0, y + 82.0, (w, h)),
                     match id {
+                        5 => (Action::Friends, true),
                         6 => (Action::Language, true),
                         7 => (Action::Accessibility, true),
                         _ => (Action::None, true),
                     }
                 );
-                if id == 5 {
-                    assert!(matches!(
-                        title.mode,
-                        Mode::Multiplayer(crate::multiplayer::Screen::Friend { .. })
-                    ));
-                    title.mode = Mode::Main;
-                }
             }
             for id in [2, 3] {
                 assert_eq!(buttons.iter().find(|b| b.id == id).unwrap().y, y + 96.0);

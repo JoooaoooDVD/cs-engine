@@ -100,6 +100,7 @@ mod dispense_fixture;
 mod dispenser;
 mod dragon;
 mod dynamic_lights;
+mod cs_friends_ui;
 mod e4mc_friends;
 mod enchant_effects;
 mod end;
@@ -2410,6 +2411,12 @@ struct Game<'a> {
     friends: Option<friends::Sharing>,
     /// The open world is published through e4mc's public relay (game/friends.rs).
     e4mc: Option<friends::E4mcSharing>,
+    /// CS Friends (CS Launcher Plus): the backend client, the screen's state,
+    /// a join waiting for this world to close, when the code was copied.
+    cs_friends: Option<horizon_client::cs_friends::Client>,
+    cs_friends_ui: horizon_client::cs_friends_screen::Ui,
+    cs_join_pending: Option<String>,
+    cs_code_copied: Option<Instant>,
     world_options: Option<lan_screen::WorldOptions>,
     /// Chat Settings opened from RestrictionsScreen: Done returns to World Options.
     options_to_world_options: bool,
@@ -7455,6 +7462,12 @@ impl Game<'_> {
             self.draw_mod_screen(&mut batch);
             return batch;
         }
+        // CS Friends opened from the title.
+        if self.screen == Screen::Friends && self.title.is_some() {
+            self.draw_cs_friends(&mut batch);
+            self.draw_pack_toasts(&mut batch, false);
+            return batch;
+        }
         if let Some(title) = &mut self.title {
             title.poll_backup();
             if std::mem::take(&mut title.onboarding_finished) {
@@ -7782,7 +7795,7 @@ impl Game<'_> {
             Screen::Stats => self.draw_stats(&mut batch),
             Screen::Advancements => self.draw_advancements(&mut batch),
             Screen::WorldOptions => self.draw_world_options(&mut batch),
-            Screen::Friends => self.draw_friends_screen(&mut batch),
+            Screen::Friends => self.draw_cs_friends(&mut batch),
             Screen::ServerLinks => self.draw_server_links(&mut batch),
             Screen::ConfirmLink => self.draw_confirm_link(&mut batch),
             Screen::DialogWarning => self.draw_dialog_warning(&mut batch),
@@ -10662,6 +10675,7 @@ impl Game<'_> {
     fn title_action(&mut self, event_loop: &ActiveEventLoop, action: Action) -> Result<()> {
         match action {
             Action::Quit => crate::game::exit_app(event_loop),
+            Action::Friends => self.open_cs_friends(),
             Action::Options => self.open_options(true),
             Action::Accessibility => {
                 self.open_options_at(true, horizon_client::options_ui::Page::Accessibility)
@@ -14454,7 +14468,8 @@ impl Game<'_> {
                 }
                 Screen::GameModeSwitcher => self.close_gamemode_switcher(false),
                 Screen::Dead => {}
-                Screen::Stats | Screen::Friends => self.screen = Screen::Paused,
+                Screen::Stats => self.screen = Screen::Paused,
+                Screen::Friends => self.cs_friends_escape(),
                 Screen::ServerLinks => self.screen = Screen::Paused,
                 // ConfirmScreen.keyPressed: Escape answers no; both return to
                 // the Server Links screen they came from.
@@ -15729,6 +15744,9 @@ impl ApplicationHandler for Game<'_> {
                     if self.screen == Screen::Mod && d != 0.0 {
                         self.mod_screen_scroll(d);
                     }
+                    if self.screen == Screen::Friends {
+                        self.cs_friends_scroll(d);
+                    }
                     // AbstractContainerScreen.mouseScrolled: a bundle under the
                     // cursor takes the wheel before the screen's own scrolling.
                     let bundle = bundles::takes_bundle_wheel(self.screen)
@@ -15798,6 +15816,13 @@ impl ApplicationHandler for Game<'_> {
                 {
                     if state == ElementState::Pressed {
                         self.mod_screen_click(button);
+                    }
+                }
+                WindowEvent::MouseInput { state, button, .. }
+                    if self.screen == Screen::Friends && self.title.is_some() =>
+                {
+                    if state == ElementState::Pressed && button == MouseButton::Left {
+                        self.cs_friends_click();
                     }
                 }
                 WindowEvent::MouseInput { state, button, .. } if self.screen == Screen::Options => {
@@ -15974,7 +15999,7 @@ impl ApplicationHandler for Game<'_> {
                             self.world_options_release()
                         }
                         Screen::Friends if pressed && button == MouseButton::Left => {
-                            self.friends_screen_click()
+                            self.cs_friends_click()
                         }
                         Screen::CommandBlock if pressed && button == MouseButton::Left => {
                             self.command_block_click()
@@ -16154,6 +16179,10 @@ impl ApplicationHandler for Game<'_> {
                     if let PhysicalKey::Code(key) = event.physical_key {
                         self.options_key(key, event.text.as_deref())?;
                     }
+                }
+                // CS Friends takes every key while open (its fields type).
+                WindowEvent::KeyboardInput { event, .. } if self.screen == Screen::Friends => {
+                    self.cs_friends_key(&event);
                 }
                 // A mod's settings page at the title takes its keys like Options.
                 WindowEvent::KeyboardInput { event, .. }
@@ -16606,6 +16635,7 @@ impl ApplicationHandler for Game<'_> {
             return;
         }
         self.tick_server_packs();
+        self.cs_friends_frame();
         self.poll_control(event_loop);
         if self.pending_save.is_some() {
             return;
@@ -17052,6 +17082,10 @@ impl<'a> Game<'a> {
             game_tests: game_tests::GameTests::default(),
             friends: None,
             e4mc: None,
+            cs_friends: None,
+            cs_friends_ui: Default::default(),
+            cs_join_pending: None,
+            cs_code_copied: None,
             debug_keys: Default::default(),
             debug_charts: Default::default(),
             debug_entries: horizon_client::debug_entries::DebugEntries::load(

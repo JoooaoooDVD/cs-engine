@@ -329,6 +329,8 @@ pub struct Shared {
     pub events: Sender<NetEvent>,
     pub config: NetConfig,
     motd: Mutex<String>,
+    /// The status favicon (CS Launcher Plus: changed live from the Host tab).
+    favicon: Mutex<Option<Vec<u8>>>,
     max_players: AtomicUsize,
     /// PlayerList.players in join order: profile id and name.
     online: Mutex<Vec<(u128, String)>>,
@@ -393,6 +395,16 @@ impl Shared {
     }
     pub fn motd(&self) -> String {
         self.motd.lock().unwrap().clone()
+    }
+    /// CS Launcher Plus: a new MOTD for the next status pings and ServerData.
+    pub fn set_motd(&self, motd: String) {
+        *self.motd.lock().unwrap() = motd;
+    }
+    pub fn favicon(&self) -> Option<Vec<u8>> {
+        self.favicon.lock().unwrap().clone()
+    }
+    pub fn set_favicon(&self, favicon: Option<Vec<u8>>) {
+        *self.favicon.lock().unwrap() = favicon;
     }
     pub fn max_players(&self) -> usize {
         self.max_players.load(Ordering::Relaxed)
@@ -462,10 +474,10 @@ impl Shared {
                 ]),
             ),
         ];
-        if let Some(icon) = &self.config.favicon {
+        if let Some(icon) = self.favicon() {
             status.push((
                 "favicon".to_owned(),
-                Json::String(format!("data:image/png;base64,{}", base64(icon))),
+                Json::String(format!("data:image/png;base64,{}", base64(&icon))),
             ));
         }
         if self.config.enforces_secure_chat() {
@@ -531,6 +543,7 @@ impl Lan {
             sync: Mutex::new(sync),
             events: tx,
             motd: Mutex::new(config.motd.clone()),
+            favicon: Mutex::new(config.favicon.clone()),
             max_players: AtomicUsize::new(config.max_players),
             online: Mutex::new(Vec::new()),
             reserved: Mutex::new(HashSet::new()),

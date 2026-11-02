@@ -922,7 +922,7 @@ impl Hub {
         let g = &self.guests[i];
         g.send(&C::ServerData(play::ServerData {
             motd: literal(&self.lan.shared.motd()),
-            icon: self.lan.shared.config.favicon.clone(),
+            icon: self.lan.shared.favicon(),
         }));
         // The player list: everyone already here, then the newcomer to all.
         let mut entries = Vec::new();

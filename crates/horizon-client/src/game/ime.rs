@@ -14,6 +14,9 @@ impl Game<'_> {
         if self.dialog_open() {
             return self.dialog_has_text_field();
         }
+        if self.screen == Screen::Friends {
+            return self.cs_friends_typing();
+        }
         if let Some(title) = self.title.as_mut() {
             return title.focused_field().is_some();
         }
@@ -105,6 +108,10 @@ impl Game<'_> {
             return;
         }
         if self.dialog_type(&text) {
+            return;
+        }
+        if self.cs_friends_typing() {
+            self.cs_friends_input(None, Some(&text));
             return;
         }
         if self.title.is_some() {

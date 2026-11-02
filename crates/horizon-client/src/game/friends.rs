@@ -33,7 +33,7 @@ pub(super) struct Sharing {
 /// e4mc publishing: the world public on the relay's domain, and whether
 /// publishing opened the world to LAN.
 pub(super) struct E4mcSharing {
-    inner: e4mc_friends::Sharing,
+    pub(super) inner: e4mc_friends::Sharing,
     /// Publishing opened the world to LAN, so stopping closes it again.
     opened_lan: bool,
 }
@@ -326,12 +326,14 @@ impl Game<'_> {
 
     /// Play with Friends. The world is paused under it in singleplayer, so
     /// new codes and sessions are read while it is drawn.
-    pub(super) fn draw_friends_screen(&mut self, batch: &mut HudBatch) {
+    #[allow(dead_code)]
+    pub(super) fn draw_legacy_friends_screen(&mut self, batch: &mut HudBatch) {
         self.tick_friends();
         let view = self.friends_view();
         friends_screen::draw(batch, &self.gui.atlas, self.cursor, &view, true);
     }
-    pub(super) fn friends_screen_click(&mut self) {
+    #[allow(dead_code)]
+    pub(super) fn legacy_friends_screen_click(&mut self) {
         let view = self.friends_view();
         let Some(action) =
             friends_screen::click(&self.gui.atlas, self.gui_size(), self.cursor, &view)

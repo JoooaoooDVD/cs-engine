@@ -419,6 +419,8 @@ impl Game<'_> {
         }
         let initial = if self.dialog_open() {
             self.dialog_edit_value()
+        } else if self.cs_friends_typing() {
+            self.cs_friends_edit_value()
         } else if self.screen == Screen::BlockEditor {
             let Some(value) = self.block_editor_edit_value() else {
                 return;
