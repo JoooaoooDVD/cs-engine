@@ -223,7 +223,6 @@ fn layout(
                 action: Action::E4mcPublish,
                 active: view.shown,
             });
-            y += 30.0;
         }
     }
     // HeaderAndFooterLayout's footer: Done, beside Troubleshooting when

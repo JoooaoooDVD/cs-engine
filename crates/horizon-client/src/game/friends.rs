@@ -220,23 +220,21 @@ impl Game<'_> {
         let Some(sharing) = self.e4mc.as_mut() else {
             return;
         };
-        let events = sharing.inner.tick();
-        for event in events {
+        let mut lines = Vec::new();
+        for event in sharing.inner.tick() {
             match event {
                 e4mc_friends::Event::Published(domain) => {
                     horizon_client::android_runtime::host_note_published(Some(&domain));
-                    self.system_message(Text::literal(format!(
+                    lines.push(format!(
                         "Your world is public: {domain} (anyone with the address can join)."
-                    )));
+                    ));
                 }
-                e4mc_friends::Event::Broadcast(message) => {
-                    self.system_message(Text::literal(message));
-                }
+                e4mc_friends::Event::Broadcast(message) => lines.push(message),
                 e4mc_friends::Event::GuestJoined => {
-                    self.system_message(Text::literal("A guest joined through the public address."))
+                    lines.push("A guest joined through the public address.".to_owned())
                 }
                 e4mc_friends::Event::GuestLeft => {
-                    self.system_message(Text::literal("A public-address guest left."))
+                    lines.push("A public-address guest left.".to_owned())
                 }
             }
         }
@@ -244,7 +242,10 @@ impl Game<'_> {
             && !sharing.inner.problem_shown
         {
             sharing.inner.problem_shown = true;
-            self.system_message(Text::literal(format!("Public address: {problem}")));
+            lines.push(format!("Public address: {problem}"));
+        }
+        for line in lines {
+            self.system_message(Text::literal(line));
         }
     }
 
