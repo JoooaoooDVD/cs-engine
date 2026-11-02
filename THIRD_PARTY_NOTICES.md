@@ -65,3 +65,12 @@ with Microsoft accounts
 The four-square Microsoft symbol in `launcher/src/microsoft.rs` reproduces the squares, positions and
 colours of Microsoft's official `ms-symbollockup_mssymbol_19.svg` from that page, unmodified. Microsoft
 and its logo are trademarks of the Microsoft group of companies; Horizon is not endorsed by Microsoft.
+
+## e4mc public relay (crates/horizon-e4mc)
+
+`crates/horizon-e4mc` and `crates/horizon-client/src/game/e4mc_friends.rs` are ported from
+[e4mc-minecraft-rust](https://github.com/sambukuper/e4mc-minecraft-rust), a Rust reimplementation of
+the [e4mc](https://github.com/vgskye/e4mc-minecraft-architectury) Minecraft mod. MIT License,
+Copyright (c) 2024 Skye (e4mc), Copyright (c) 2026 sambukuper (the Rust port). The relay and the
+broker (`*.e4mc.link`) are Skye's free public service; CS Engine only speaks their protocol and
+does not operate them.

@@ -100,6 +100,7 @@ mod dispense_fixture;
 mod dispenser;
 mod dragon;
 mod dynamic_lights;
+mod e4mc_friends;
 mod enchant_effects;
 mod end;
 mod entity_culling;
@@ -2407,6 +2408,8 @@ struct Game<'a> {
     serving: Option<integrated::Serving>,
     /// The open world is shared behind an invite code (game/friends.rs).
     friends: Option<friends::Sharing>,
+    /// The open world is published through e4mc's public relay (game/friends.rs).
+    e4mc: Option<friends::E4mcSharing>,
     world_options: Option<lan_screen::WorldOptions>,
     /// Chat Settings opened from RestrictionsScreen: Done returns to World Options.
     options_to_world_options: bool,
@@ -6864,6 +6867,7 @@ impl Game<'_> {
         }
         horizon_client::spans::time("tick_lan", || self.tick_lan(false));
         self.tick_friends();
+        self.tick_e4mc();
         horizon_client::spans::time("tick_hand", || self.tick_hand());
         horizon_client::spans::time("tick_sleep", || self.tick_sleep());
         self.announce_sleep_status();
@@ -17025,6 +17029,7 @@ impl<'a> Game<'a> {
             test_highlights: HashMap::new(),
             game_tests: game_tests::GameTests::default(),
             friends: None,
+            e4mc: None,
             debug_keys: Default::default(),
             debug_charts: Default::default(),
             debug_entries: horizon_client::debug_entries::DebugEntries::load(

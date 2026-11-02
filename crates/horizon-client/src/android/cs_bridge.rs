@@ -684,6 +684,16 @@ pub extern "system" fn Java_com_craftstudio_cslauncher_engine_horizon_HorizonNat
     host_push(HostEvent::ReleaseAll);
 }
 
+/// The world's public e4mc address while it is published, else null: the launcher's
+/// Play with Friends invites carry it.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_craftstudio_cslauncher_engine_horizon_HorizonNative_nativeHostPublished<'l>(
+    mut env: JNIEnv<'l>,
+    _class: JClass<'l>,
+) -> jstring {
+    jstring_result(&mut env, horizon_client::android_runtime::host_published())
+}
+
 /// Bit 0: the game wants the pointer captured (world view); bit 1: it asked for a text keyboard.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_craftstudio_cslauncher_engine_horizon_HorizonNative_nativeHostPoll<'l>(

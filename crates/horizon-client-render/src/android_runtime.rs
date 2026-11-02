@@ -290,6 +290,14 @@ pub fn host_set_grab(grabbed: bool) {
 pub fn host_grab() -> bool {
     HOST_GRAB.load(Ordering::Relaxed)
 }
+/// The world's public address (e4mc) while it is published, for the launcher's invites.
+static HOST_PUBLISHED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+pub fn host_note_published(address: Option<&str>) {
+    *HOST_PUBLISHED.lock().unwrap_or_else(|e| e.into_inner()) = address.map(str::to_owned);
+}
+pub fn host_published() -> Option<String> {
+    HOST_PUBLISHED.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
 /// Game asked for a text editor (chat, sign, field): the host shows its keyboard.
 pub fn host_set_keyboard(wanted: bool) {
     HOST_KEYBOARD.store(wanted, Ordering::Relaxed);

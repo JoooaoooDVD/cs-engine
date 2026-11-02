@@ -30,6 +30,24 @@ pub struct FriendsView {
     pub notice: Option<String>,
     /// The code was just copied.
     pub copied: bool,
+    /// The e4mc section: the world public on the relay's domain.
+    pub e4mc: Option<E4mcView>,
+}
+
+/// The e4mc part of the screen: the world's public address, joinable by
+/// anyone from any client (CS Engine, the Java engine, vanilla).
+#[derive(Clone, Debug, Default)]
+pub struct E4mcView {
+    /// The world is published right now.
+    pub publishing: bool,
+    /// The world's public domain.
+    pub domain: Option<String>,
+    /// Guests being carried right now.
+    pub guests: usize,
+    /// Why publishing isn't serving, when the player asked for it.
+    pub problem: Option<String>,
+    /// The domain was just copied.
+    pub copied: bool,
 }
 
 /// A button's action.
@@ -38,6 +56,12 @@ pub enum Action {
     Share,
     Copy,
     Stop,
+    /// Publish the world through e4mc's public relay.
+    E4mcPublish,
+    /// Copy the public address.
+    E4mcCopy,
+    /// End the publish.
+    E4mcStop,
     /// Open the troubleshooting page.
     Help,
     Done,
@@ -142,6 +166,65 @@ fn layout(
             action: Action::Share,
             active: view.shown,
         });
+        y += 36.0;
+    }
+    // The e4mc section: a public address anyone can join from any client.
+    if let Some(e4mc) = &view.e4mc
+        && y + 64.0 <= h - 33.0
+    {
+        y += 6.0;
+        lines.push(("Public address (e4mc)".to_owned(), grey(), y));
+        y += 12.0;
+        if e4mc.publishing {
+            match &e4mc.domain {
+                Some(domain) => add(
+                    &mut lines,
+                    &format!("Anyone with this address can join, from any launcher: {domain}"),
+                    WHITE,
+                    &mut y,
+                ),
+                None => add(&mut lines, "Reaching the relay...", WHITE, &mut y),
+            }
+            if e4mc.guests > 0 {
+                add(&mut lines, &format!("{} guest(s) connected through it.", e4mc.guests), grey(), &mut y);
+            }
+            buttons.push(Button {
+                x: cx - 154.0,
+                y,
+                w: 150.0,
+                label: if e4mc.copied { "Copied" } else { "Copy Address" },
+                action: Action::E4mcCopy,
+                active: e4mc.domain.is_some(),
+            });
+            buttons.push(Button {
+                x: cx + 4.0,
+                y,
+                w: 150.0,
+                label: "Stop Publishing",
+                action: Action::E4mcStop,
+                active: true,
+            });
+            y += 30.0;
+            if let Some(problem) = &e4mc.problem {
+                add(&mut lines, problem, WHITE, &mut y);
+            }
+        } else {
+            add(
+                &mut lines,
+                "Get a public address through e4mc's free relay: no VPN, no port forwarding. Anyone who has the address can join.",
+                WHITE,
+                &mut y,
+            );
+            buttons.push(Button {
+                x: cx - 100.0,
+                y,
+                w: 200.0,
+                label: "Publish to Anyone",
+                action: Action::E4mcPublish,
+                active: view.shown,
+            });
+            y += 30.0;
+        }
     }
     // HeaderAndFooterLayout's footer: Done, beside Troubleshooting when
     // friends on the internet can't reach the host.

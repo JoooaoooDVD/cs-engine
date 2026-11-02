@@ -30,6 +30,8 @@ horizon-shaders = { path = "../horizon-shaders" }
 # Horizon's own shader packs: the format, the stages and the check (docs/shaders.md).
 horizon-shader-api = { path = "../horizon-shader-api" }
 horizon-friends = { path = "../horizon-friends" }
+# e4mc publishing: the world public on e4mc's relay (docs/e4mc.md); pure Rust, idle until used.
+horizon-e4mc = { path = "../horizon-e4mc" }
 # Horizon mods: sandboxed WebAssembly components, off unless installed and turned on (docs/mods.md).
 # Their runtime is the `mods` feature.
 horizon-mods = { path = "../horizon-mods", default-features = false, features = ["index"] }
