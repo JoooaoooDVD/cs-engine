@@ -148,83 +148,53 @@ jobs:
           "$NDK/llvm-nm" -D "out/${{ matrix.abi }}/libcs_engine.so" | grep -cE "ANativeActivity_onCreate|Java_com_craftstudio_cslauncher_engine_horizon_HorizonNative_nativeInstall|Java_com_craftstudio_cslauncher_engine_horizon_HorizonNative_nativeHostSkin" | grep -qx 3 || { echo "::error::bridge symbols missing"; exit 1; }
           cp cs-native-mods.json "out/${{ matrix.abi }}/" 2>/dev/null || true
           ls -l "out/${{ matrix.abi }}" symbols
-      - uses: actions/upload-artifact@v4
+      # No Actions artifacts: they count against the account's 500 MB storage quota and GitHub
+      # switches Actions off for the repo once it is exceeded. Everything goes straight to the
+      # cs-engine-latest release (release assets are free), from this very job.
+      - name: Engine tables + notices (from the pinned upstream public APK)
         if: steps.want.outputs.build == '1'
-        with:
-          name: horizon-${{ matrix.abi }}
-          path: |
-            out/${{ matrix.abi }}/libcs_engine.so
-            out/${{ matrix.abi }}/cs-native-mods.json
-            symbols/*.debug
-          if-no-files-found: error
-
-  engine-data:
-    name: Engine tables + notices
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - name: Extract engine-data.zip from the pinned upstream public APK
         run: |
           set -e
           curl -fsSL -o upstream.apk "$ENGINE_DATA_APK_URL"
           if [ -n "$ENGINE_DATA_APK_SHA256" ]; then echo "$ENGINE_DATA_APK_SHA256  upstream.apk" | sha256sum -c -; fi
           unzip -o -q upstream.apk assets/engine-data.zip
-          mkdir -p out
-          mv assets/engine-data.zip out/engine-data.zip
-          python3 - <<'EOF'
-          import zipfile, json
-          z = zipfile.ZipFile('out/engine-data.zip'); names = z.namelist()
+          mkdir -p release
+          mv assets/engine-data.zip release/engine-data.zip
+          python3 - <<'PY'
+          import zipfile
+          z = zipfile.ZipFile('release/engine-data.zip'); names = z.namelist()
           assert 'horizon-resources.json' in names and 'registries.json' in names, names[:10]
           print(len(names), 'engine table files')
-          EOF
-          cp LICENSE out/LICENSE.txt
-          cp THIRD_PARTY_NOTICES.md out/THIRD_PARTY_NOTICES.md
-      - uses: actions/upload-artifact@v4
-        with:
-          name: horizon-engine-data
-          path: out/*
-          if-no-files-found: error
-
-  publish:
-    name: Publish cs-engine-latest
-    needs: [build, engine-data, tests]
-    if: ${{ always() && needs.build.result == 'success' && needs.engine-data.result == 'success' && (github.event_name == 'push' || github.event.inputs.publish == 'true') }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
+          PY
+          cp LICENSE release/LICENSE.txt
+          cp THIRD_PARTY_NOTICES.md release/THIRD_PARTY_NOTICES.md
       - name: Assemble release files
+        if: steps.want.outputs.build == '1'
         run: |
           set -e
-          mkdir -p release
-          for abi in arm64-v8a x86_64; do
-            if [ -f "artifacts/horizon-$abi/out/$abi/libcs_engine.so" ]; then
-              cp "artifacts/horizon-$abi/out/$abi/libcs_engine.so" "release/libcs_engine-$abi.so"
-              cp artifacts/horizon-$abi/symbols/*.debug release/ 2>/dev/null || true
-            fi
-          done
-          cp artifacts/horizon-engine-data/engine-data.zip release/
-          cp artifacts/horizon-arm64-v8a/out/arm64-v8a/cs-native-mods.json release/ 2>/dev/null || true
-          cp artifacts/horizon-engine-data/LICENSE.txt artifacts/horizon-engine-data/THIRD_PARTY_NOTICES.md release/
+          cp "out/${{ matrix.abi }}/libcs_engine.so" "release/libcs_engine-${{ matrix.abi }}.so"
+          cp symbols/*.debug release/
+          cp cs-native-mods.json release/ 2>/dev/null || true
           VERSION=$(grep -oP "versionName '\K[^']+" packaging/android/build.gradle | head -1)
           (cd release && sha256sum * > SHA256SUMS.txt)
-          python3 - "$VERSION" <<'EOF'
-          import json, sys, hashlib, os, subprocess
+          python3 - "$VERSION" <<'PY'
+          import json, sys, hashlib, os
           files = {n: hashlib.sha256(open('release/'+n,'rb').read()).hexdigest() for n in sorted(os.listdir('release')) if n != 'SHA256SUMS.txt'}
           json.dump({"schema": 1, "engine": "cs-engine", "name": "CS Engine", "tagline": "Powered by Craft Studio", "cs_engine_version": os.environ.get("CS_ENGINE_VERSION"), "lib": "libcs_engine.so", "version": sys.argv[1], "minecraft": "26.3",
                      "commit": os.environ.get("GITHUB_SHA"), "run": os.environ.get("GITHUB_RUN_NUMBER"),
                      "feature": "cs-host", "files": files}, open('release/BUILD.json','w'), indent=2)
-          EOF
+          PY
           ls -l release
+      - name: Drop stale assets from cs-engine-latest
+        if: ${{ steps.want.outputs.build == '1' && (github.event_name == 'push' || github.event.inputs.publish == 'true') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          ids=$(gh api "repos/${{ github.repository }}/releases/tags/cs-engine-latest" --jq '.assets[].id' 2>/dev/null || true)
+          for id in $ids; do gh api -X DELETE "repos/${{ github.repository }}/releases/assets/$id" >/dev/null && echo "deleted asset $id"; done
       - name: Update cs-engine-latest prerelease
+        if: ${{ steps.want.outputs.build == '1' && (github.event_name == 'push' || github.event.inputs.publish == 'true') }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: cs-engine-latest
@@ -232,6 +202,6 @@ jobs:
           prerelease: true
           body: |
             CS Engine ${{ env.CS_ENGINE_VERSION }} (Powered by Craft Studio) for CS Launcher Plus, built from `${{ github.sha }}`.
-            Files: `libcs_engine-<abi>.so` (stripped), `*.debug` symbols, `engine-data.zip`, notices, `BUILD.json`, `SHA256SUMS.txt`.
+            Files: `libcs_engine-<abi>.so` (stripped), `*.debug` symbols, `engine-data.zip`, `cs-native-mods.json`, notices, `BUILD.json`, `SHA256SUMS.txt`.
             Built on Horizon Android (https://github.com/Vasysik/horizon-android, MIT). Minecraft resources are downloaded on the device from official sources only.
           files: release/*
