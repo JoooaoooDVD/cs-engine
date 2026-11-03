@@ -1,8 +1,12 @@
 # CS Engine: native mods (.hnmod, horizon-rust/horizon-mods registry) compiled into every
 # CS Engine build by tools/cs_native_apply.sh (horizon-mixins, MIT, levzzz5154).
-# One registry id per line; the newest published version is used. Only mods that hook the
-# stable native hook points ("hooks" in horizon-native.json) belong here.
+# One registry id per line; the newest published version is used. A mod whose mixins no
+# longer apply to this source is skipped by the build (see cs-native-mods.json "skipped").
+# All of them are OFF until the player installs them (launcher Mods browser / Options > Mods).
+#
+# Hook-point mods (build on any CS Engine):
 zoom
+classic_zoom
 fps_overlay
 keystrokes
 minimap
@@ -10,8 +14,38 @@ coords_hud
 armor_status
 status_effect_hud
 toggle_sprint
+appleskin
 appleskin_horizon
 crosshair_indicator
+fullbright
 fullbright_horizon
 light_overlay
 inventory_profiles
+blockscope
+eatinganimation
+fly_speed
+jei
+recipes
+serverify
+xtoxray
+# Revision-pinned mods (tried on each build, skipped when they no longer apply):
+astral_cruiser
+basic_hud
+biomecompass
+carryblock
+chatheads
+distant_horizons
+enchantmenthints
+fair_freecam
+freecam
+freecam_plus
+freelook
+itemnew
+lookat
+mousetricks
+rightharvest
+shulker_peek
+smartf3
+treefall
+veinminer
+worldedit

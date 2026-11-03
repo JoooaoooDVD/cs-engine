@@ -28,6 +28,7 @@ def main():
     revoked = {r.get("id") for r in index.get("revoked", []) if isinstance(r, dict)}
     out.mkdir(parents=True, exist_ok=True)
     built = []
+    skipped = []
     for id_ in ids:
         p = projects.get(id_)
         if p is None or p["kind"] != "native-mod":
@@ -42,10 +43,10 @@ def main():
         z = zipfile.ZipFile(io.BytesIO(data))
         manifest = json.loads(z.read("horizon-native.json"))
         hooks = manifest.get("hooks")
-        if hooks is None:
-            sys.exit(f"cs_native_mods: {id_}: pins an exact Horizon revision, not the hook points")
-        if hooks > hooks_api:
-            sys.exit(f"cs_native_mods: {id_}: needs hooks {hooks}, the game has {hooks_api}")
+        if hooks is not None and hooks > hooks_api:
+            print(f"cs_native_mods: {id_}: skipped, needs hooks {hooks}, the game has {hooks_api}")
+            skipped.append({"id": id_, "reason": f"needs native hooks API {hooks} (engine has {hooks_api})"})
+            continue
         dest = out / id_
         if dest.exists():
             import shutil
@@ -71,9 +72,11 @@ def main():
             text = re.sub(r'(?m)^horizon_revision\s*=\s*"[0-9a-f]+"', f'horizon_revision = "{revision}"', text)
             toml.write_text(text)
         built.append({"id": id_, "version": v["version"], "name": p["name"], "hooks": hooks,
+                      "pinned": manifest.get("horizon"),
                       "license": p.get("license"), "source": p.get("source"), "sha256": f["sha256"]})
         print(f"cs_native_mods: {id_} {v['version']} (hooks {hooks})")
-    (out.parent / "cs-native-mods.json").write_text(json.dumps(built, indent=2))
+    (out.parent / "cs-native-mods.json").write_text(
+        json.dumps({"built": built, "skipped": skipped}, indent=2))
 
 
 if __name__ == "__main__":

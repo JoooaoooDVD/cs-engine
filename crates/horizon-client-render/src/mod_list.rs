@@ -125,14 +125,15 @@ impl ModList {
         let _ = fs::write(path, self.serialize());
     }
     pub fn is_on(&self, i: usize) -> bool {
-        self.installed.get(i).is_some_and(|m| {
-            m.dev
-                || if m.native.is_some() {
-                    !self.disabled.contains(&m.id)
-                } else {
-                    self.enabled.contains(&m.id)
-                }
-        })
+        self.installed
+            .get(i)
+            .is_some_and(|m| m.dev || self.enabled.contains(&m.id))
+    }
+    /// CS Engine ships the registry's native mods compiled in: one is on only once the
+    /// player installed it (the launcher's Mods browser or Options > Mods write
+    /// `mod.<id>:true`), so forty built-in mods don't all run at once.
+    pub fn native_on(&self, id: &str) -> bool {
+        self.enabled.contains(id)
     }
     /// Turns installed mod `i` on or off (a dev mod stays on). A native mod's
     /// line says `false` when off, so that the launcher's next build leaves
@@ -142,11 +143,11 @@ impl ModList {
             return;
         };
         if m.native.is_some() {
-            if self.disabled.remove(&m.id) {
-                self.enabled.insert(m.id.clone());
-            } else {
-                self.enabled.remove(&m.id);
+            if self.enabled.remove(&m.id) {
                 self.disabled.insert(m.id.clone());
+            } else {
+                self.disabled.remove(&m.id);
+                self.enabled.insert(m.id.clone());
             }
         } else if !self.enabled.remove(&m.id) {
             self.enabled.insert(m.id.clone());
@@ -204,14 +205,14 @@ mod tests {
             native: Some(NativePage::default()),
             ..installed("c", false)
         });
-        // On until turned off; off, the launcher leaves it out.
-        assert!(list.is_on(2));
-        list.toggle(2);
+        // CS Engine: a built-in native mod is off until installed (turned on).
         assert!(!list.is_on(2));
-        assert_eq!(list.serialize(), "mod.c:false\n");
-        assert_eq!(ModList::parse(&list.serialize()).disabled, list.disabled);
         list.toggle(2);
         assert!(list.is_on(2));
         assert_eq!(list.serialize(), "mod.c:true\n");
+        assert_eq!(ModList::parse(&list.serialize()).enabled, list.enabled);
+        list.toggle(2);
+        assert!(!list.is_on(2));
+        assert_eq!(list.serialize(), "mod.c:false\n");
     }
 }

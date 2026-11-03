@@ -26,7 +26,50 @@ git rev-parse HEAD > .horizon-revision
 cargo fetch
 cargo metadata --format-version 1 --offline --locked > /dev/null
 rm -rf "$STAGE"
-"$BIN" apply --workspace . --mods "$MODS" --out "$STAGE" > "$STAGE.json"
+# Plan errors name the bundle at fault (`file`): that mod is set aside and the rest retried,
+# so one registry mod that drifted from this source never blocks the build.
+SKIPPED="$(dirname "$MODS")/cs-native-skipped"
+rm -rf "$SKIPPED"; mkdir -p "$SKIPPED"
+for attempt in $(seq 1 40); do
+  if "$BIN" apply --workspace . --mods "$MODS" --out "$STAGE" > "$STAGE.json" 2> "$STAGE.err"; then
+    break
+  fi
+  cat "$STAGE.err"
+  BAD=$(python3 - "$STAGE.err" "$MODS" <<'PY'
+import json, os, sys
+try:
+    d = json.loads(open(sys.argv[1]).read())
+except Exception:
+    sys.exit(0)
+f = d.get("file") or ""
+mods = os.path.realpath(sys.argv[2])
+f = os.path.realpath(f) if f else ""
+if f.startswith(mods + os.sep):
+    print(f[len(mods) + 1:].split(os.sep)[0])
+PY
+)
+  if [ -z "$BAD" ] || [ ! -d "$MODS/$BAD" ]; then
+    echo "cs_native_apply: horizon-mixins failed and no bundle to blame"; exit 1
+  fi
+  echo "::warning::native mod $BAD skipped: $(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('message',''))" "$STAGE.err" | head -c 300)"
+  python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('message',''))" "$STAGE.err" > "$SKIPPED/$BAD.txt"
+  mv "$MODS/$BAD" "$SKIPPED/$BAD"
+  rm -rf "$STAGE"
+done
+test -d "$STAGE" || { echo "cs_native_apply: apply never succeeded"; exit 1; }
+python3 - "$(dirname "$MODS")/cs-native-mods.json" "$SKIPPED" <<'PY'
+import json, os, sys
+path, skipped = sys.argv[1], sys.argv[2]
+d = json.load(open(path))
+for name in sorted(os.listdir(skipped)):
+    if name.endswith('.txt'):
+        mod = name[:-4]
+        d["built"] = [m for m in d["built"] if m["id"] != mod]
+        d["skipped"].append({"id": mod, "reason": open(os.path.join(skipped, name)).read().strip()[:300]})
+json.dump(d, open(path, 'w'), indent=2)
+print("cs_native_apply: built", [m["id"] for m in d["built"]])
+print("cs_native_apply: skipped", [m["id"] for m in d["skipped"]])
+PY
 python3 - "$STAGE" <<'PY'
 import json, os, shutil, sys
 stage = sys.argv[1]
