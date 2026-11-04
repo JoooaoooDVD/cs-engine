@@ -376,6 +376,14 @@ pub fn host_request_skin() {
 pub fn host_take_skin_request() -> bool {
     HOST_SKIN_REQUEST.swap(false, Ordering::Relaxed)
 }
+/// CS voice chat wants the microphone: the host asks for RECORD_AUDIO.
+static HOST_MIC_REQUEST: AtomicBool = AtomicBool::new(false);
+pub fn host_request_mic() {
+    HOST_MIC_REQUEST.store(true, Ordering::Relaxed);
+}
+pub fn host_take_mic_request() -> bool {
+    HOST_MIC_REQUEST.swap(false, Ordering::Relaxed)
+}
 /// Game asked for a text editor (chat, sign, field): the host shows its keyboard.
 pub fn host_set_keyboard(wanted: bool) {
     HOST_KEYBOARD.store(wanted, Ordering::Relaxed);

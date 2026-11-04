@@ -42,6 +42,7 @@ fn pack_files(world_tables: &Option<WorldTables>) -> horizon_world::loot::PackOv
 mod advancements;
 mod cs_bubbles;
 mod cs_skins;
+mod cs_voice;
 mod advancements_screen;
 mod agent;
 mod agent_settings;
@@ -2432,6 +2433,8 @@ struct Game<'a> {
     cs_bubbles: std::collections::HashMap<String, cs_bubbles::CsBubble>,
     /// CS Engine skin sharing between CS Launcher players.
     cs_skins: cs_skins::CsSkins,
+    /// CS Engine built-in voice chat (game/cs_voice.rs).
+    cs_voice: cs_voice::CsVoice,
     cs_friends_ui: horizon_client::cs_friends_screen::Ui,
     cs_join_pending: Option<String>,
     cs_code_copied: Option<Instant>,
@@ -16691,6 +16694,7 @@ impl ApplicationHandler for Game<'_> {
         }
         self.tick_server_packs();
         self.cs_friends_frame();
+        self.cs_voice_frame();
         self.poll_control(event_loop);
         if self.pending_save.is_some() {
             return;
@@ -17146,6 +17150,7 @@ impl<'a> Game<'a> {
             cs_friends: None,
             cs_bubbles: Default::default(),
             cs_skins: Default::default(),
+            cs_voice: Default::default(),
             cs_friends_ui: Default::default(),
             cs_join_pending: None,
             cs_code_copied: None,

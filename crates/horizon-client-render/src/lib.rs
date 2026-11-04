@@ -25,6 +25,7 @@ pub mod collisions;
 pub mod command_block;
 pub mod containers;
 pub mod crash;
+pub mod cs_voice;
 pub mod datapack;
 pub mod dynamic_light;
 pub mod effects;

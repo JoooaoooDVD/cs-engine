@@ -61,6 +61,8 @@ struct Mixer {
     world_names: Vec<String>,
     /// The callback's cameras (position, basis, world), kept to be refilled without allocating.
     cameras: Vec<([f64; 3], Basis, u32)>,
+    /// CS Engine: other players' voices (cs_voice.rs).
+    voice: crate::cs_voice::VoiceMix,
     limiter_peak: f32,
     /// The output device the stream was opened on (`Library.currentDeviceName`).
     #[cfg(feature = "audio")]
@@ -649,6 +651,14 @@ fn mix(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
             c.position += step;
         }
     }
+    // CS Engine voice chat: the players heard, from the game's own camera.
+    {
+        let listener = mixer.listener;
+        let b = basis(mixer.listener_yaw, mixer.listener_pitch);
+        mixer
+            .voice
+            .mix(data, channels, rate, listener, b, distance_gain, stereo_gains);
+    }
     // Limit the whole buffer together, preserving waveform and stereo balance
     // instead of flattening each overloaded sample; release over 200 ms
     // (OpenAL Soft's output limiter, `ALC_OUTPUT_LIMITER_SOFT`, releases
@@ -1023,6 +1033,33 @@ impl Audio {
 
     /// `SoundManager.updateSource`: the camera position and rotation
     /// (`Listener.setTransform` takes its forward and up vectors).
+    /// CS voice chat: `who` speaks `samples` (16 kHz mono) from `at`, heard
+    /// within `range` blocks.
+    pub fn voice_push(&mut self, who: u128, at: [f32; 3], range: f32, samples: &[i16]) {
+        if let Ok(mut m) = self.backend.mixer.lock() {
+            m.voice.push(who, at, range, samples);
+        }
+    }
+    /// CS voice chat: who is heard right now.
+    pub fn voice_speaking(&self) -> Vec<u128> {
+        self.backend
+            .mixer
+            .lock()
+            .map(|m| m.voice.speaking())
+            .unwrap_or_default()
+    }
+    /// CS voice chat: everyone's voices, 0 to 2.
+    pub fn voice_volume(&mut self, volume: f32) {
+        if let Ok(mut m) = self.backend.mixer.lock() {
+            m.voice.volume = volume;
+        }
+    }
+    /// CS voice chat: a world left, every voice with it.
+    pub fn voice_clear(&mut self) {
+        if let Ok(mut m) = self.backend.mixer.lock() {
+            m.voice.clear();
+        }
+    }
     pub fn set_listener(&mut self, position: [f64; 3], yaw: f32, pitch: f32) {
         self.listener = position;
         self.listener_yaw = yaw;

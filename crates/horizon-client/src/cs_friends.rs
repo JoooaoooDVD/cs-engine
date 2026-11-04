@@ -32,6 +32,13 @@ static DIR: OnceLock<PathBuf> = OnceLock::new();
 pub fn configure_dir(dir: PathBuf) {
     let _ = DIR.set(dir);
 }
+/// The directory the identity (and the other CS files shared by every
+/// profile: voice settings) live in.
+pub fn identity_dir() -> PathBuf {
+    DIR.get()
+        .cloned()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+}
 fn identity_path() -> PathBuf {
     DIR.get()
         .cloned()

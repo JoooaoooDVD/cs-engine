@@ -40,6 +40,7 @@ pub enum Tab {
     Friends,
     Chat,
     Host,
+    Voice,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Focus {
@@ -111,6 +112,25 @@ pub struct HostView {
     pub world: String,
 }
 
+/// The Voice tab (CS built-in voice chat, game/cs_voice.rs).
+#[derive(Clone, Debug, Default)]
+pub struct VoiceView {
+    pub enabled: bool,
+    pub ptt: bool,
+    pub volume: u32,
+    pub mic: u32,
+    pub range: u32,
+    /// Voice can travel here (a CS Engine world or server).
+    pub available: bool,
+    pub in_world: bool,
+    pub mic_problem: Option<String>,
+    pub talking: bool,
+    /// Microphone level 0 to 1.
+    pub level: f32,
+    /// Players in the world: name, muted, heard right now.
+    pub players: Vec<(String, bool, bool)>,
+}
+
 /// What the screen shows (the game fills it from `cs_friends::State`).
 #[derive(Clone, Debug, Default)]
 pub struct View {
@@ -126,6 +146,7 @@ pub struct View {
     /// The open conversation, oldest first.
     pub chat: Vec<Message>,
     pub host: HostView,
+    pub voice: VoiceView,
     /// The code was just copied.
     pub copied: bool,
     /// Caret blink phase.
@@ -168,6 +189,13 @@ pub enum Action {
     CycleIcon,
     /// Player limit up (+1) or down (-1) a step.
     Players(i32),
+    /// Voice chat on/off, push-to-talk/open mic, volume, mic gain, range steps, mute a player.
+    VoiceEnabled,
+    VoiceMode,
+    VoiceVolume(i32),
+    VoiceMic(i32),
+    VoiceRange(i32),
+    VoiceMute(String),
     Done,
 }
 
@@ -272,8 +300,16 @@ fn layout(atlas: &HudAtlas, (w, h): (f32, f32), ui: &Ui, view: &View) -> Layout 
             },
         ),
         (Tab::Host, "Host".to_owned()),
+        (
+            Tab::Voice,
+            if view.voice.talking || view.voice.players.iter().any(|p| p.2) {
+                "Voice ●".to_owned()
+            } else {
+                "Voice".to_owned()
+            },
+        ),
     ];
-    let tab_w = ((width - 8.0) / 3.0).floor();
+    let tab_w = ((width - 12.0) / 4.0).floor();
     for (i, (tab, label)) in tabs.into_iter().enumerate() {
         buttons.push(Button {
             x: left + i as f32 * (tab_w + 4.0),
@@ -674,6 +710,84 @@ fn layout(atlas: &HudAtlas, (w, h): (f32, f32), ui: &Ui, view: &View) -> Layout 
                     active: ui.max_players < 32,
                 });
                 let _ = y;
+            }
+        }
+        Tab::Voice => {
+            let vv = &view.voice;
+            let mut y = top;
+            let mut add = |lines: &mut Vec<(String, u32, f32, f32)>, text: &str, color: u32, y: &mut f32| {
+                for line in wrap(text, width, atlas) {
+                    lines.push((line, color, left, *y));
+                    *y += 10.0;
+                }
+            };
+            buttons.push(Button {
+                x: left,
+                y,
+                w: width,
+                label: if vv.enabled { "Voice Chat: ON" } else { "Voice Chat: OFF" }.to_owned(),
+                action: Action::VoiceEnabled,
+                active: true,
+            });
+            y += 24.0;
+            if !vv.enabled {
+                add(&mut lines, "Built-in proximity voice chat for CS Engine worlds: talk to the players near you in a world you host or join (e4mc, LAN, a CS server). No account, no extra app.", grey(), &mut y);
+            } else {
+                // Status.
+                if !vv.in_world {
+                    add(&mut lines, "Join or host a world to talk. Voice works in CS Engine worlds and servers.", grey(), &mut y);
+                } else if !vv.available {
+                    add(&mut lines, "This server doesn't carry CS voice (not a CS Engine / Horizon host).", red(), &mut y);
+                } else if let Some(p) = &vv.mic_problem {
+                    add(&mut lines, &format!("Microphone: {p}. Allow the microphone permission, then come back."), red(), &mut y);
+                } else if vv.talking {
+                    let bars = (vv.level * 10.0).round() as usize;
+                    add(&mut lines, &format!("Transmitting  {}{}", "|".repeat(bars.min(10)), "·".repeat(10 - bars.min(10))), green(), &mut y);
+                } else if vv.ptt {
+                    add(&mut lines, "Ready. Hold the Push to Talk key (V, or the CS control button bound to it in Key Binds).", WHITE, &mut y);
+                } else {
+                    add(&mut lines, "Ready. Open mic: sends when you speak.", WHITE, &mut y);
+                }
+                y += 2.0;
+                // Settings rows.
+                let row = |lines: &mut Vec<(String, u32, f32, f32)>, buttons: &mut Vec<Button>, y: f32, text: String, minus: Action, plus: Action, lo: bool, hi: bool| {
+                    lines.push((text, grey(), left, y + 6.0));
+                    buttons.push(Button { x: right - 60.0, y, w: 28.0, label: "-".to_owned(), action: minus, active: lo });
+                    buttons.push(Button { x: right - 28.0, y, w: 28.0, label: "+".to_owned(), action: plus, active: hi });
+                };
+                lines.push((format!("Mode: {}", if vv.ptt { "Push to talk" } else { "Open mic" }), grey(), left, y + 6.0));
+                buttons.push(Button { x: right - 60.0, y, w: 60.0, label: "Change".to_owned(), action: Action::VoiceMode, active: true });
+                y += 22.0;
+                row(&mut lines, &mut buttons, y, format!("Voice volume: {}%", vv.volume), Action::VoiceVolume(-1), Action::VoiceVolume(1), vv.volume > 0, vv.volume < 200);
+                y += 22.0;
+                row(&mut lines, &mut buttons, y, format!("Microphone gain: {}%", vv.mic), Action::VoiceMic(-1), Action::VoiceMic(1), vv.mic > 50, vv.mic < 300);
+                y += 22.0;
+                row(&mut lines, &mut buttons, y, format!("Range (your worlds): {} blocks", vv.range), Action::VoiceRange(-1), Action::VoiceRange(1), vv.range > 8, vv.range < 256);
+                y += 24.0;
+                // Players.
+                let list_top = y;
+                let fit_rows = ((bottom - list_top) / ROW).floor().max(1.0) as i32;
+                let total = vv.players.len() as i32;
+                let scroll = ui.scroll.clamp(0, (total - fit_rows).max(0));
+                if total > fit_rows {
+                    overflow = Some((total, fit_rows));
+                }
+                if vv.players.is_empty() && vv.in_world {
+                    lines.push(("Nobody else in the world yet.".to_owned(), dim(), left, y + 4.0));
+                }
+                for (i, (name, muted, heard)) in vv.players.iter().enumerate().skip(scroll as usize).take(fit_rows as usize) {
+                    let y = list_top + (i as i32 - scroll) as f32 * ROW;
+                    lines.push(("●".to_owned(), if *heard { green() } else if *muted { red() } else { dim() }, left, y + 6.0));
+                    lines.push((fit(atlas, name, width - 90.0), WHITE, left + 10.0, y + 6.0));
+                    buttons.push(Button {
+                        x: right - 60.0,
+                        y,
+                        w: 60.0,
+                        label: if *muted { "Unmute" } else { "Mute" }.to_owned(),
+                        action: Action::VoiceMute(name.clone()),
+                        active: true,
+                    });
+                }
             }
         }
     }

@@ -219,6 +219,27 @@ impl Game<'_> {
             }
             None => (None, 0, None, false),
         };
+        {
+            let v = &self.cs_voice;
+            let in_world = self.title.is_none();
+            view.voice = screen::VoiceView {
+                enabled: v.settings.enabled,
+                ptt: v.settings.ptt,
+                volume: v.settings.volume,
+                mic: v.settings.mic,
+                range: v.settings.range,
+                available: in_world
+                    && self
+                        .remote
+                        .as_ref()
+                        .is_some_and(|r| r.joined && r.mod_net),
+                in_world,
+                mic_problem: v.mic_problem.clone(),
+                talking: v.talking,
+                level: v.level,
+                players: self.cs_voice_players(),
+            };
+        }
         view.host = HostView {
             in_world: self.title.is_none(),
             can_publish: self.title.is_none() && !self.external_server(),
@@ -378,6 +399,30 @@ impl Game<'_> {
                 ui.icon = (ui.icon + 1) % 3;
                 self.cs_save_branding();
             }
+            Action::VoiceEnabled => {
+                self.cs_voice.settings.enabled = !self.cs_voice.settings.enabled;
+                self.cs_voice_save();
+            }
+            Action::VoiceMode => {
+                self.cs_voice.settings.ptt = !self.cs_voice.settings.ptt;
+                self.cs_voice_save();
+            }
+            Action::VoiceVolume(step) => {
+                let s = &mut self.cs_voice.settings;
+                s.volume = (s.volume as i32 + step * 10).clamp(0, 200) as u32;
+                self.cs_voice_save();
+            }
+            Action::VoiceMic(step) => {
+                let s = &mut self.cs_voice.settings;
+                s.mic = (s.mic as i32 + step * 25).clamp(50, 300) as u32;
+                self.cs_voice_save();
+            }
+            Action::VoiceRange(step) => {
+                let s = &mut self.cs_voice.settings;
+                s.range = (s.range as i32 + step * 8).clamp(8, 256) as u32;
+                self.cs_voice_save();
+            }
+            Action::VoiceMute(name) => self.cs_voice_toggle_mute(&name),
             Action::Players(step) => {
                 // 2, 4, 6, 8, 10, 12, 16, 20, 24, 32.
                 const STEPS: [usize; 10] = [2, 4, 6, 8, 10, 12, 16, 20, 24, 32];

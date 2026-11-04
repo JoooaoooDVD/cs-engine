@@ -271,6 +271,7 @@ impl Game<'_> {
             extras_hud::draw_minimap(batch, atlas, &mut corners, &look);
         }
         self.draw_cs_hud(batch, &mut corners);
+        self.draw_cs_voice_hud(batch, &mut corners);
         if mod_panels {
             self.draw_mod_panels(batch, &mut corners);
         }

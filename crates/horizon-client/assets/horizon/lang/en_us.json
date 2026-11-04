@@ -58,6 +58,7 @@
   "horizon.mods.not_built": " (Not built)",
   "cs.menu.hud_editor": "HUD Editor",
   "cs.menu.exit": "Exit Game",
+  "key.cs_voice": "CS Voice: Push to Talk",
   "horizon.mods.native_unsupported": " (Native .hnmod - not supported)",
   "horizon.mods.dev": " (Dev)",
   "horizon.mods.settings": "Settings",
