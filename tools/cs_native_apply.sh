@@ -62,7 +62,24 @@ if f.startswith(mods + os.sep):
 PY
 )
   if [ -z "$BAD" ] || [ ! -d "$MODS/$BAD" ]; then
-    echo "cs_native_apply: horizon-mixins failed and no bundle to blame"; exit 1
+    # No bundle named: find the one whose removal changes the outcome (plan is a dry run).
+    echo "cs_native_apply: no bundle named in the diagnostic, probing bundles one by one"
+    BASE_ERR=$(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(d.get('code'),d.get('file'),d.get('message'))" "$STAGE.err" 2>/dev/null || cat "$STAGE.err")
+    BAD=""
+    for cand in "$MODS"/*/; do
+      cand=$(basename "$cand")
+      mv "$MODS/$cand" "$SKIPPED/.probe-$cand"
+      if "$BIN" plan --workspace . --mods "$MODS" > /dev/null 2> "$STAGE.probe"; then
+        NEW_ERR="ok"
+      else
+        NEW_ERR=$(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(d.get('code'),d.get('file'),d.get('message'))" "$STAGE.probe" 2>/dev/null || cat "$STAGE.probe")
+      fi
+      mv "$SKIPPED/.probe-$cand" "$MODS/$cand"
+      if [ "$NEW_ERR" != "$BASE_ERR" ]; then BAD="$cand"; break; fi
+    done
+    if [ -z "$BAD" ]; then
+      echo "cs_native_apply: horizon-mixins failed and no bundle to blame"; exit 1
+    fi
   fi
   echo "::warning::native mod $BAD skipped: $(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('message',''))" "$STAGE.err" | head -c 300)"
   python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('message',''))" "$STAGE.err" > "$SKIPPED/$BAD.txt"
