@@ -190,9 +190,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -e
-          ids=$(gh api "repos/${{ github.repository }}/releases/tags/cs-engine-latest" --jq '.assets[].id' 2>/dev/null || true)
-          for id in $ids; do gh api -X DELETE "repos/${{ github.repository }}/releases/assets/$id" >/dev/null && echo "deleted asset $id"; done
+          # The release may not exist yet (a fresh repository): nothing to drop then.
+          ids=$(gh api "repos/${{ github.repository }}/releases/tags/cs-engine-latest" --jq '.assets[].id' 2>/dev/null) || ids=""
+          for id in $ids; do
+            if gh api -X DELETE "repos/${{ github.repository }}/releases/assets/$id" >/dev/null; then
+              echo "deleted asset $id"
+            else
+              echo "could not delete asset $id"
+            fi
+          done
+          true
       - name: Update cs-engine-latest prerelease
         if: ${{ steps.want.outputs.build == '1' && (github.event_name == 'push' || github.event.inputs.publish == 'true') }}
         uses: softprops/action-gh-release@v2
