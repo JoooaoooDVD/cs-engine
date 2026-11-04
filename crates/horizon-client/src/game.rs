@@ -41,6 +41,7 @@ fn pack_files(world_tables: &Option<WorldTables>) -> horizon_world::loot::PackOv
 
 mod advancements;
 mod cs_bubbles;
+mod cs_skins;
 mod advancements_screen;
 mod agent;
 mod agent_settings;
@@ -2429,6 +2430,8 @@ struct Game<'a> {
     cs_friends: Option<horizon_client::cs_friends::Client>,
     /// CS Engine chat bubbles over players' heads, by profile name.
     cs_bubbles: std::collections::HashMap<String, cs_bubbles::CsBubble>,
+    /// CS Engine skin sharing between CS Launcher players.
+    cs_skins: cs_skins::CsSkins,
     cs_friends_ui: horizon_client::cs_friends_screen::Ui,
     cs_join_pending: Option<String>,
     cs_code_copied: Option<Instant>,
@@ -6411,6 +6414,7 @@ impl Game<'_> {
         self.tick_debug_charts();
         self.tick_tutorial();
         self.cs_bubbles_tick();
+        self.cs_skins_tick();
         if self.screen == Screen::Creative {
             self.refresh_creative_tabs();
             // CreativeModeInventoryScreen.containerTick: a player without
@@ -17141,6 +17145,7 @@ impl<'a> Game<'a> {
             e4mc: None,
             cs_friends: None,
             cs_bubbles: Default::default(),
+            cs_skins: Default::default(),
             cs_friends_ui: Default::default(),
             cs_join_pending: None,
             cs_code_copied: None,

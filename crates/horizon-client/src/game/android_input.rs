@@ -507,6 +507,17 @@ impl Game<'_> {
                     // synthesize winit key events, and the custom-key path only reaches key
                     // mappings, never the focused field — so they take the on-screen keyboard's
                     // route, which the field already understands. Everything else stays a key.
+                    // Key Binds (vanilla's and native mods') waiting for a key: a CS control
+                    // button binds the key it sends, as a keyboard would — the custom-key path
+                    // below never reaches the options screen.
+                    if self.screen == Screen::Options && self.ui.options.selected_key.is_some() {
+                        if down && let Some(key) = horizon_client::keybinds::key_code(&token) {
+                            if let Err(e) = self.options_key(key, None) {
+                                log::warn!("host key bind: {e}");
+                            }
+                        }
+                        continue;
+                    }
                     let editing = match token.as_str() {
                         "key.keyboard.enter" | "key.keyboard.keypad.enter" => Some(Output::Enter),
                         "key.keyboard.backspace" => Some(Output::Backspace),

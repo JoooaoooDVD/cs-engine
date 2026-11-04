@@ -42,6 +42,12 @@ pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
         .ok()
 }
 
+/// Standard base64 with padding.
+pub fn base64_encode(bytes: &[u8]) -> String {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    STANDARD.encode(bytes)
+}
+
 /// `unpackTextures(property)`: the textures of a `textures` property's
 /// base64 JSON payload.
 pub fn unpack(value: &str, signature: Signature, valid_uris: &[&str]) -> Textures {

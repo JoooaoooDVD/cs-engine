@@ -4596,6 +4596,32 @@ impl Game<'_> {
             }
             capes.insert(local, OFFLINE.into());
         }
+        // CS Engine: the skins other CS Launcher players shared, where the server
+        // gave none (offline names on a LAN world, an offline-mode server).
+        let cs_players: Vec<(u128, String)> = self
+            .remote
+            .as_ref()
+            .map(|r| {
+                r.players
+                    .iter()
+                    .filter(|(u, _)| **u != local && !resolved.iter().any(|(ru, _)| ru == *u))
+                    .map(|(u, n)| (*u, n.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !cs_players.is_empty() {
+            for (uuid, skin, is_slim, cape) in self.cs_skins_for(&cs_players) {
+                if let Some(skin) = skin {
+                    if is_slim {
+                        slim.insert(uuid);
+                    }
+                    resolved.push((uuid, skin));
+                }
+                if let Some(cape) = cape {
+                    capes.entry(uuid).or_insert(cape);
+                }
+            }
+        }
         // PlayerInfo.getSkin: the downloaded skin and its model, else the
         // profile's default skin (DefaultPlayerSkin.get), slim or wide.
         let skin_of = |skins: &HashMap<u128, String>, uuid: u128| match skins.get(&uuid) {

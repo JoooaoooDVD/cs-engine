@@ -2463,6 +2463,13 @@ impl Game<'_> {
     pub(super) fn list_native_mods(&mut self) {
         let mut mods = Vec::new();
         self.native_mods(&mut mods);
+        // CS Engine ships every registry native mod built in, but Options > Mods lists
+        // only the ones the player installed (a `mod.<id>` line, on or off) — the
+        // launcher's Mods browser adds them; nothing is pre-installed.
+        let installed = |id: &str| {
+            self.settings.mods.enabled.contains(id) || self.settings.mods.disabled.contains(id)
+        };
+        mods.retain(|m| installed(&m.id));
         // A WebAssembly mod of the same id doesn't run (`start_mods`): the
         // native row stands for it, and alone toggles its `mod.<id>` line.
         self.settings
@@ -2486,6 +2493,12 @@ impl Game<'_> {
                 native: Some(page),
             });
         }
+    }
+    /// Every native mod built into this engine, by id.
+    pub(super) fn native_mod_ids(&mut self) -> Vec<String> {
+        let mut mods = Vec::new();
+        self.native_mods(&mut mods);
+        mods.into_iter().map(|m| m.id).collect()
     }
     /// A click on button `button` of native mod `i`'s page (its index in
     /// Options > Mods), and the page's labels after it.

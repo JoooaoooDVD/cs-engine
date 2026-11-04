@@ -402,8 +402,9 @@ impl Game<'_> {
                 }
             })
             .collect();
-        self.list_native_mods();
+        // Dropped `.hnmod` files first: one of a built-in mod installs it.
         self.list_unsupported_native_mods();
+        self.list_native_mods();
     }
     /// CS Engine: `.hnmod` files dropped into the mods folder are listed with a clear
     /// reason instead of vanishing silently (upstream lists them only in its own launcher).
@@ -416,6 +417,10 @@ impl Game<'_> {
             .unwrap_or_default();
         paths.retain(|p| p.extension().is_some_and(|e| e == "hnmod"));
         paths.sort();
+        if paths.is_empty() {
+            return;
+        }
+        let built_ins = self.native_mod_ids();
         for path in paths {
             let file = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
             let (id, title) = match horizon_mods::index::native::Bundle::read(&path) {
@@ -425,15 +430,18 @@ impl Game<'_> {
                 }
                 Err(_) => (String::new(), file.clone()),
             };
-            let listed = !id.is_empty() && self.settings.mods.installed.iter().any(|r| r.id == id);
-            if listed {
+            let built_in = !id.is_empty() && built_ins.contains(&id);
+            if built_in {
                 // The same mod is built into CS Engine: a copy dropped into horizon-mods/
-                // means "I want this on", so turn the built-in one on.
+                // means "I want this", so install the built-in one (on, unless turned off).
                 if !self.settings.mods.disabled.contains(&id)
                     && self.settings.mods.enabled.insert(id.clone())
                 {
-                    log::info!("Horizon: {file}: built-in native mod {id} turned on");
+                    log::info!("Horizon: {file}: built-in native mod {id} installed");
                 }
+                continue;
+            }
+            if self.settings.mods.installed.iter().any(|r| r.id == id) {
                 continue;
             }
             log::warn!("Horizon: {file}: native mod (.hnmod) cannot be loaded by CS Engine");

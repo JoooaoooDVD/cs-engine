@@ -423,6 +423,10 @@ impl Client {
 struct Identity {
     token: String,
 }
+/// The player's identity token (created on first use), for the other CS backends.
+pub fn identity_token() -> String {
+    load_or_create_identity().token
+}
 fn load_or_create_identity() -> Identity {
     let path = identity_path();
     if let Ok(text) = std::fs::read_to_string(&path)
@@ -470,7 +474,8 @@ fn fresh_token() -> String {
     out
 }
 
-fn rpc(name: &str, body: &serde_json::Value) -> Result<serde_json::Value, String> {
+/// One backend call (also used by CS skin sharing).
+pub fn rpc(name: &str, body: &serde_json::Value) -> Result<serde_json::Value, String> {
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(12))
         .timeout_read(Duration::from_secs(20))
