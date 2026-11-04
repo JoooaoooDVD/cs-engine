@@ -892,6 +892,8 @@ impl Game<'_> {
             );
             let focused = self.screen == Screen::Chat;
             let heard = self.mods.running().then(|| line.plain());
+            let own = self.own_profile_name();
+            self.cs_bubble_say(&own, message);
             self.ui.chat.add(
                 &self.gui.atlas,
                 line,

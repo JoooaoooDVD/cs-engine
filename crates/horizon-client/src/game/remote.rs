@@ -4053,6 +4053,15 @@ impl Game<'_> {
                     .filter(|_| !self.settings.file.bool("onlyShowSecureChat"))
                     .map_or_else(|| serde_json::Value::from(p.content.as_str()), tag_to_json);
                 let line = self.format_chat(&p.chat_type, content);
+                // CS Engine: the words float over the sender's head too.
+                if let Some(name) = self
+                    .remote
+                    .as_ref()
+                    .and_then(|r| r.tab_players.get(&p.sender))
+                    .map(|t| t.name.clone())
+                {
+                    self.cs_bubble_say(&name, &p.content);
+                }
                 let trust = self.chat_trust(
                     p.sender,
                     signature.is_some(),

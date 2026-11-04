@@ -207,6 +207,8 @@ impl Game<'_> {
                 lines,
                 light: l,
                 discrete,
+                badge: player && self.cs_badge_for(&name),
+                bubble: if player { self.cs_bubble_view(&name) } else { None },
             });
         }
         // Armor stands name themselves: an invisible one with a visible name
@@ -266,6 +268,8 @@ impl Game<'_> {
                 lines,
                 light: l,
                 discrete: false,
+                badge: false,
+                bubble: None,
             });
         }
         // ItemFrameRenderer.shouldShowName/getNameTag: only the targeted
@@ -301,6 +305,8 @@ impl Game<'_> {
                         center.z.floor() as i32,
                     ),
                     discrete: false,
+                    badge: false,
+                    bubble: None,
                 });
             }
         }
@@ -319,6 +325,8 @@ impl Game<'_> {
         // The text alpha that goes with getBackgroundOpacity(0.25):
         // max((0.25 + 0.75) / 2, 0.5), as ARGB.color (the floor of 255 times it).
         const FADED: u32 = 0x7F;
+        // Options.getBackgroundOpacity(0.25) black, as ARGB.color.
+        const BACKGROUND: u32 = 0x3F00_0000;
         let mut patches = Vec::new();
         for tag in self.name_tags(camera, alpha) {
             let o = tag.at - camera;
@@ -331,7 +339,8 @@ impl Game<'_> {
                     o,
                     &tag.lines,
                     FADED,
-                    true,
+                    BACKGROUND,
+                    tag.badge,
                     0,
                     light,
                     NAME_TAG_UNIT,
@@ -347,7 +356,8 @@ impl Game<'_> {
                 o,
                 &tag.lines,
                 0xFF,
-                false,
+                0,
+                tag.badge,
                 0,
                 light,
                 NAME_TAG_UNIT,
@@ -358,12 +368,48 @@ impl Game<'_> {
                 o,
                 &tag.lines,
                 FADED,
-                true,
+                BACKGROUND,
+                tag.badge,
                 2,
                 0,
                 NAME_TAG_UNIT,
                 see_through,
             ));
+            // CS Engine chat bubble: above the tag, popping in and fading out.
+            if let Some(bubble) = &tag.bubble {
+                let alpha = (bubble.opacity() * 255.0) as u32;
+                if alpha == 0 {
+                    continue;
+                }
+                let scale = bubble.scale();
+                let unit = NAME_TAG_UNIT * scale;
+                let line_h = f64::from(10.0 * unit);
+                // The top of the tag: its last line's lift plus one line.
+                let top = tag.lines.last().map_or(0.0, |(_, l)| *l)
+                    + f64::from(9.0f32 * 1.15 * NAME_TAG_UNIT)
+                    + 0.08
+                    + f64::from(bubble.drift());
+                let n = bubble.lines.len();
+                let lines: Vec<(Text, f64)> = bubble
+                    .lines
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| (t.clone(), top + (n - 1 - i) as f64 * line_h))
+                    .collect();
+                let bg = (alpha * 0xA0 / 255) << 24 | 0x10_1014;
+                self.mark_entity(out.len(), "minecraft:name_tag");
+                patches.extend(self.name_tag_quads(
+                    o,
+                    &lines,
+                    alpha,
+                    bg,
+                    false,
+                    0,
+                    light,
+                    unit,
+                    out,
+                ));
+            }
         }
         self.map_patches.extend(patches);
     }
@@ -377,14 +423,13 @@ impl Game<'_> {
         o: glam::DVec3,
         lines: &[(Text, f64)],
         text_alpha: u32,
-        background: bool,
+        background: u32,
+        badge: bool,
         text_layer: u32,
         light: u32,
         unit: f32,
         out: &mut Vec<Vertex>,
     ) -> Vec<horizon_client::font::Patch> {
-        // Options.getBackgroundOpacity(0.25) black, as ARGB.color.
-        const BACKGROUND: u32 = 0x3F00_0000;
         // The camera's facing (Camera.rotation()), turned round in third-person
         // front view, so the text reads the right way from where it is seen.
         let (view_yaw, view_pitch) =
@@ -416,10 +461,21 @@ impl Game<'_> {
                 text,
                 y0,
                 text_alpha << 24 | 0xFF_FFFF,
-                if background { BACKGROUND } else { 0 },
+                background,
             );
+            // CS badge: the background runs on to the left under a small CS tile.
+            let mut badge_bg = 0..0;
+            if badge {
+                let x = -self.gui.atlas.font.width_text(text) / 2.0;
+                let start = batch.vertices.len();
+                if background >> 24 != 0 {
+                    batch.fill(&self.gui.atlas, x - 13.0, y0 - 1.0, 12.0, 10.0, background);
+                }
+                badge_bg = start..batch.vertices.len();
+                cs_badge(&mut batch, &self.gui.atlas, x - 12.0, y0, text_alpha);
+            }
             for (i, quad) in batch.vertices.as_chunks::<6>().0.iter().enumerate() {
-                let shift = if i * 6 < behind {
+                let shift = if i * 6 < behind || badge_bg.contains(&(i * 6)) {
                     away
                 } else {
                     glam::Vec3::ZERO
@@ -443,6 +499,54 @@ impl Game<'_> {
     }
 }
 
+/// The CS badge: a light 9×9 tile with a pixel "CS" cut into it, its top left
+/// at (`x`, `y`) in the tag's text pixels. Drawn with the text's alpha.
+fn cs_badge(
+    batch: &mut HudBatch,
+    atlas: &horizon_client::hud::HudAtlas,
+    x: f32,
+    y: f32,
+    alpha: u32,
+) {
+    let tile = alpha << 24 | 0xC6_C6CE;
+    let ink = alpha << 24 | 0x10_1014;
+    // A rounded tile: the middle columns full height, the edge columns short.
+    batch.fill(atlas, x + 1.0, y, 7.0, 9.0, tile);
+    batch.fill(atlas, x, y + 1.0, 1.0, 7.0, tile);
+    batch.fill(atlas, x + 8.0, y + 1.0, 1.0, 7.0, tile);
+    // "C" (3×5) at column 1 and "S" (3×5) at column 5, rows 2..7.
+    const C: [(f32, f32); 9] = [
+        (0., 0.),
+        (1., 0.),
+        (2., 0.),
+        (0., 1.),
+        (0., 2.),
+        (0., 3.),
+        (0., 4.),
+        (1., 4.),
+        (2., 4.),
+    ];
+    const S: [(f32, f32); 11] = [
+        (0., 0.),
+        (1., 0.),
+        (2., 0.),
+        (0., 1.),
+        (0., 2.),
+        (1., 2.),
+        (2., 2.),
+        (2., 3.),
+        (0., 4.),
+        (1., 4.),
+        (2., 4.),
+    ];
+    for (px, py) in C {
+        batch.fill(atlas, x + 1.0 + px, y + 2.0 + py, 1.0, 1.0, ink);
+    }
+    for (px, py) in S {
+        batch.fill(atlas, x + 5.0 + px, y + 2.0 + py, 1.0, 1.0, ink);
+    }
+}
+
 /// `EntityAttachment.NAME_TAG`: `(0, bbHeight, 0)` of the box of the entity's
 /// current pose, which the submitter lifts 0.5 more, between the last two tick
 /// positions. The player box is `Pose::dimensions(1.0)`.
@@ -463,6 +567,9 @@ struct NameTag {
     lines: Vec<(Text, f64)>,
     light: u8,
     discrete: bool,
+    /// CS Engine: the CS badge before the name, and the chat bubble above it.
+    badge: bool,
+    bubble: Option<super::cs_bubbles::BubbleView>,
 }
 
 #[cfg(test)]
