@@ -591,7 +591,7 @@ fn layout(atlas: &HudAtlas, (w, h): (f32, f32), ui: &Ui, view: &View) -> Layout 
         Tab::Host => {
             let hv = &view.host;
             let mut y = top;
-            let mut add = |lines: &mut Vec<(String, u32, f32, f32)>, text: &str, color: u32, y: &mut f32| {
+            let add = |lines: &mut Vec<(String, u32, f32, f32)>, text: &str, color: u32, y: &mut f32| {
                 for line in wrap(text, width, atlas) {
                     lines.push((line, color, left, *y));
                     *y += 10.0;
@@ -715,7 +715,7 @@ fn layout(atlas: &HudAtlas, (w, h): (f32, f32), ui: &Ui, view: &View) -> Layout 
         Tab::Voice => {
             let vv = &view.voice;
             let mut y = top;
-            let mut add = |lines: &mut Vec<(String, u32, f32, f32)>, text: &str, color: u32, y: &mut f32| {
+            let add = |lines: &mut Vec<(String, u32, f32, f32)>, text: &str, color: u32, y: &mut f32| {
                 for line in wrap(text, width, atlas) {
                     lines.push((line, color, left, *y));
                     *y += 10.0;

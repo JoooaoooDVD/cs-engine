@@ -163,7 +163,7 @@ pub use horizon_items::item_data;
 pub use horizon_items::items;
 pub use horizon_items::random_sequences;
 
-pub use horizon_client_render::{android_gamepad, android_runtime, file_lock, keypad, touch};
+pub use horizon_client_render::{android_gamepad, android_runtime, cs_voice, file_lock, keypad, touch};
 
 #[cfg(test)]
 #[path = "android/device_preferences.rs"]

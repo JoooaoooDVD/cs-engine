@@ -420,7 +420,8 @@ pub(super) struct Remote {
     /// `ClientSuggestionProvider.customCompletionSuggestions`: the extra chat
     /// completions this server sent (ClientboundCustomChatCompletionsPacket).
     custom_completions: std::collections::BTreeSet<String>,
-    players: HashMap<u128, String>,
+    /// `pub(super)`: CS voice chat and skin sharing name players by uuid.
+    pub(super) players: HashMap<u128, String>,
     /// `ClientPacketListener.playerInfoMap` as player-list entries, and
     /// which of them are listed.
     tab_players: HashMap<u128, horizon_client::tab_list::TabPlayer>,
