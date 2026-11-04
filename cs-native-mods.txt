@@ -32,13 +32,13 @@ xtoxray
 astral_cruiser
 basic_hud
 # biomecompass   (pinned to an older engine: custom_name is a Tag now)
-carryblock
+# carryblock   (pinned to an older engine: Slots/Dim API moved)
 chatheads
-distant_horizons
+# distant_horizons   (pinned to an older engine: Remote.commands gone)
 enchantmenthints
-fair_freecam
-freecam
-freecam_plus
+# fair_freecam   (pinned to an older engine: unresolved cfg in play_mouse)
+# freecam   (pinned to an older engine: unresolved cfg in play_mouse)
+# freecam_plus   (pinned to an older engine: unresolved cfg in play_mouse)
 freelook
 itemnew
 lookat
@@ -46,6 +46,6 @@ mousetricks
 rightharvest
 shulker_peek
 smartf3
-treefall
-veinminer
-worldedit
+# treefall   (pinned to an older engine: Remote.commands gone)
+# veinminer   (pinned to an older engine: Remote.commands gone)
+# worldedit   (pinned to an older engine: horizon-mixins rejects it)

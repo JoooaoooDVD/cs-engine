@@ -335,7 +335,7 @@ impl Game<'_> {
             if tag.discrete {
                 self.mark_translucent_entity(out.len(), "minecraft:name_tag");
                 let light = vertex_light(tag.light);
-                patches.extend(self.name_tag_quads(
+                patches.extend(self.cs_name_tag_quads(
                     o,
                     &tag.lines,
                     FADED,
@@ -352,7 +352,7 @@ impl Game<'_> {
             let lit = (tag.light >> 4).max(2) << 4 | (tag.light & 15).max(2);
             self.mark_entity(out.len(), "minecraft:name_tag");
             let light = vertex_light(lit);
-            patches.extend(self.name_tag_quads(
+            patches.extend(self.cs_name_tag_quads(
                 o,
                 &tag.lines,
                 0xFF,
@@ -364,7 +364,7 @@ impl Game<'_> {
                 out,
             ));
             // RenderPipelines.TEXT_SEE_THROUGH: no depth test, no lightmap.
-            patches.extend(self.name_tag_quads(
+            patches.extend(self.cs_name_tag_quads(
                 o,
                 &tag.lines,
                 FADED,
@@ -398,7 +398,7 @@ impl Game<'_> {
                     .collect();
                 let bg = (alpha * 0xA0 / 255) << 24 | 0x10_1014;
                 self.mark_entity(out.len(), "minecraft:name_tag");
-                patches.extend(self.name_tag_quads(
+                patches.extend(self.cs_name_tag_quads(
                     o,
                     &lines,
                     alpha,
@@ -419,6 +419,34 @@ impl Game<'_> {
     /// Returns the glyph pixels the atlas still needs.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn name_tag_quads(
+        &self,
+        o: glam::DVec3,
+        lines: &[(Text, f64)],
+        text_alpha: u32,
+        background: bool,
+        text_layer: u32,
+        light: u32,
+        unit: f32,
+        out: &mut Vec<Vertex>,
+    ) -> Vec<horizon_client::font::Patch> {
+        // Options.getBackgroundOpacity(0.25) black, as ARGB.color.
+        const BACKGROUND: u32 = 0x3F00_0000;
+        self.cs_name_tag_quads(
+            o,
+            lines,
+            text_alpha,
+            if background { BACKGROUND } else { 0 },
+            false,
+            text_layer,
+            light,
+            unit,
+            out,
+        )
+    }
+    /// CS Engine's name tag lines: any background colour (0 for none) and the
+    /// CS badge before the text.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn cs_name_tag_quads(
         &self,
         o: glam::DVec3,
         lines: &[(Text, f64)],

@@ -300,7 +300,6 @@ impl Game<'_> {
                 glam::DVec3::from_array(text_at) - camera,
                 &[(Text::literal(text), 0.0)],
                 0xFF,
-                0,
                 false,
                 2,
                 0,
