@@ -37,12 +37,25 @@ for attempt in $(seq 1 40); do
   cat "$STAGE.err"
   BAD=$(python3 - "$STAGE.err" "$MODS" <<'PY'
 import json, os, sys
+raw = open(sys.argv[1]).read()
 try:
-    d = json.loads(open(sys.argv[1]).read())
+    d = json.loads(raw)
 except Exception:
+    d = None
+    start = raw.find("{")
+    while start != -1 and d is None:
+        try:
+            d = json.loads(raw[start:raw.rfind("}") + 1])
+        except Exception:
+            start = raw.find("{", start + 1)
+    if d is None:
+        sys.exit(0)
+mods = os.path.realpath(sys.argv[2])
+mod_id = d.get("mod_id") or ""
+if mod_id and os.path.isdir(os.path.join(mods, mod_id)):
+    print(mod_id)
     sys.exit(0)
 f = d.get("file") or ""
-mods = os.path.realpath(sys.argv[2])
 f = os.path.realpath(f) if f else ""
 if f.startswith(mods + os.sep):
     print(f[len(mods) + 1:].split(os.sep)[0])
