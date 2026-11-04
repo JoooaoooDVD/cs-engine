@@ -69,12 +69,14 @@ PY
     for cand in "$MODS"/*/; do
       cand=$(basename "$cand")
       mv "$MODS/$cand" "$SKIPPED/.probe-$cand"
-      if "$BIN" plan --workspace . --mods "$MODS" > /dev/null 2> "$STAGE.probe"; then
+      rm -rf "$STAGE.probe-out"
+      if "$BIN" apply --workspace . --mods "$MODS" --out "$STAGE.probe-out" > /dev/null 2> "$STAGE.probe"; then
         NEW_ERR="ok"
       else
         NEW_ERR=$(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(d.get('code'),d.get('file'),d.get('message'))" "$STAGE.probe" 2>/dev/null || cat "$STAGE.probe")
       fi
       mv "$SKIPPED/.probe-$cand" "$MODS/$cand"
+      rm -rf "$STAGE.probe-out"
       if [ "$NEW_ERR" != "$BASE_ERR" ]; then BAD="$cand"; break; fi
     done
     if [ -z "$BAD" ]; then
