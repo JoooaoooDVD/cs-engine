@@ -427,6 +427,13 @@ impl Game<'_> {
             };
             let listed = !id.is_empty() && self.settings.mods.installed.iter().any(|r| r.id == id);
             if listed {
+                // The same mod is built into CS Engine: a copy dropped into horizon-mods/
+                // means "I want this on", so turn the built-in one on.
+                if !self.settings.mods.disabled.contains(&id)
+                    && self.settings.mods.enabled.insert(id.clone())
+                {
+                    log::info!("Horizon: {file}: built-in native mod {id} turned on");
+                }
                 continue;
             }
             log::warn!("Horizon: {file}: native mod (.hnmod) cannot be loaded by CS Engine");
