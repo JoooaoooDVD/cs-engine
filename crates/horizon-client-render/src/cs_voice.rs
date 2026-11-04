@@ -275,7 +275,7 @@ impl VoiceMix {
 // ---- Capture: the microphone --------------------------------------------
 
 /// What the input callback collects: mono samples at the device's rate.
-#[cfg_attr(not(feature = "audio"), allow(dead_code))]
+#[cfg_attr(any(not(feature = "audio"), target_os = "android"), allow(dead_code))]
 struct MicBuf {
     samples: Vec<f32>,
     rate: u32,
@@ -287,13 +287,13 @@ struct MicBuf {
 }
 
 /// The open microphone, feeding [`Mic::take`].
-#[cfg(feature = "audio")]
+#[cfg(all(feature = "audio", not(target_os = "android")))]
 pub struct Mic {
     _stream: cpal::Stream,
     buf: std::sync::Arc<std::sync::Mutex<MicBuf>>,
     pub device: String,
 }
-#[cfg(feature = "audio")]
+#[cfg(all(feature = "audio", not(target_os = "android")))]
 impl Mic {
     /// The system's default input, in its default configuration; an error
     /// when there is none or it cannot be opened (no permission yet).
@@ -343,8 +343,57 @@ impl Mic {
     pub fn level(&self) -> f32 {
         self.buf.lock().map(|b| b.level).unwrap_or(0.0)
     }
+    /// Why the microphone stopped working, if it did.
+    pub fn problem(&self) -> Option<String> {
+        None
+    }
 }
-#[cfg(feature = "audio")]
+/// Android: the host app records (`AudioRecord`, voice communication preset
+/// with echo cancellation) and pushes 16 kHz mono samples through
+/// `android_runtime`; opening here only asks it to start.
+#[cfg(target_os = "android")]
+pub struct Mic {
+    pub device: String,
+    opened: Instant,
+}
+#[cfg(target_os = "android")]
+impl Mic {
+    pub fn open() -> Result<Self, String> {
+        crate::android_runtime::host_mic_want(true);
+        Ok(Self {
+            device: "host microphone".into(),
+            opened: Instant::now(),
+        })
+    }
+    pub fn take(&self, gain: f32) -> Vec<i16> {
+        let mut s = crate::android_runtime::host_mic_take();
+        if (gain - 1.0).abs() > 0.01 {
+            for v in &mut s {
+                *v = (f32::from(*v) * gain).clamp(-32768.0, 32767.0) as i16;
+            }
+        }
+        s
+    }
+    pub fn level(&self) -> f32 {
+        crate::android_runtime::host_mic_level()
+    }
+    /// The host reported it cannot record (no permission, no device), or
+    /// never started within 6 s.
+    pub fn problem(&self) -> Option<String> {
+        match crate::android_runtime::host_mic_state() {
+            2 => Some("microphone not available (permission?)".into()),
+            0 if self.opened.elapsed().as_secs() > 6 => Some("microphone did not start".into()),
+            _ => None,
+        }
+    }
+}
+#[cfg(target_os = "android")]
+impl Drop for Mic {
+    fn drop(&mut self) {
+        crate::android_runtime::host_mic_want(false);
+    }
+}
+#[cfg(all(feature = "audio", not(target_os = "android")))]
 fn build_input<T>(
     device: &cpal::Device,
     config: &cpal::SupportedStreamConfig,
@@ -383,7 +432,7 @@ where
         .map_err(|e| format!("microphone open: {e}"))
 }
 /// The buffer drained into samples at [`RATE`] (linear), the level noted.
-#[cfg_attr(not(feature = "audio"), allow(dead_code))]
+#[cfg_attr(any(not(feature = "audio"), target_os = "android"), allow(dead_code))]
 fn take_resampled(b: &mut MicBuf, gain: f32) -> Vec<i16> {
     let src: Vec<f32> = std::mem::take(&mut b.samples);
     if src.is_empty() {
@@ -416,11 +465,11 @@ fn take_resampled(b: &mut MicBuf, gain: f32) -> Vec<i16> {
     out
 }
 /// Without the `audio` feature there is no microphone.
-#[cfg(not(feature = "audio"))]
+#[cfg(all(not(feature = "audio"), not(target_os = "android")))]
 pub struct Mic {
     pub device: String,
 }
-#[cfg(not(feature = "audio"))]
+#[cfg(all(not(feature = "audio"), not(target_os = "android")))]
 impl Mic {
     pub fn open() -> Result<Self, String> {
         Err("built without audio".into())
@@ -430,6 +479,9 @@ impl Mic {
     }
     pub fn level(&self) -> f32 {
         0.0
+    }
+    pub fn problem(&self) -> Option<String> {
+        None
     }
 }
 

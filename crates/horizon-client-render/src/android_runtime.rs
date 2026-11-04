@@ -384,6 +384,52 @@ pub fn host_request_mic() {
 pub fn host_take_mic_request() -> bool {
     HOST_MIC_REQUEST.swap(false, Ordering::Relaxed)
 }
+/// CS voice chat captures through the host (Android `AudioRecord`, voice
+/// communication preset: echo cancellation and noise suppression come with
+/// it): the engine says when it wants the microphone, the host records
+/// 16 kHz mono PCM and pushes it here.
+static HOST_MIC_WANTED: AtomicBool = AtomicBool::new(false);
+/// 0 idle, 1 recording, 2 failed (no permission, no device).
+static HOST_MIC_STATE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+static HOST_MIC_LEVEL: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static HOST_MIC_SAMPLES: std::sync::Mutex<Vec<i16>> = std::sync::Mutex::new(Vec::new());
+pub fn host_mic_want(wanted: bool) {
+    HOST_MIC_WANTED.store(wanted, Ordering::Relaxed);
+    if !wanted {
+        if let Ok(mut s) = HOST_MIC_SAMPLES.lock() {
+            s.clear();
+        }
+        HOST_MIC_STATE.store(0, Ordering::Relaxed);
+    }
+}
+pub fn host_mic_wanted() -> bool {
+    HOST_MIC_WANTED.load(Ordering::Relaxed)
+}
+pub fn host_mic_set_state(state: u8) {
+    HOST_MIC_STATE.store(state, Ordering::Relaxed);
+}
+pub fn host_mic_state() -> u8 {
+    HOST_MIC_STATE.load(Ordering::Relaxed)
+}
+/// The host's samples (16 kHz mono); at most a second is kept.
+pub fn host_mic_push(samples: &[i16]) {
+    let peak = samples.iter().map(|s| i32::from(*s).unsigned_abs()).max().unwrap_or(0);
+    HOST_MIC_LEVEL.store(peak, Ordering::Relaxed);
+    if let Ok(mut s) = HOST_MIC_SAMPLES.lock() {
+        s.extend_from_slice(samples);
+        if s.len() > 16_000 {
+            let extra = s.len() - 16_000;
+            s.drain(..extra);
+        }
+    }
+}
+pub fn host_mic_take() -> Vec<i16> {
+    HOST_MIC_SAMPLES.lock().map(|mut s| std::mem::take(&mut *s)).unwrap_or_default()
+}
+/// The last push's peak, 0 to 1.
+pub fn host_mic_level() -> f32 {
+    HOST_MIC_LEVEL.load(Ordering::Relaxed) as f32 / 32768.0
+}
 /// Game asked for a text editor (chat, sign, field): the host shows its keyboard.
 pub fn host_set_keyboard(wanted: bool) {
     HOST_KEYBOARD.store(wanted, Ordering::Relaxed);

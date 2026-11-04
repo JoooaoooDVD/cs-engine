@@ -702,6 +702,30 @@ pub extern "system" fn Java_com_craftstudio_cslauncher_engine_horizon_HorizonNat
 }
 
 /// Skin & Cape changed in the host: PNG paths (empty = none) and `slim`/`classic`.
+/// CS voice chat: the host's microphone samples (16 kHz mono PCM16).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_craftstudio_cslauncher_engine_horizon_HorizonNative_nativeHostMic<'l>(
+    env: JNIEnv<'l>,
+    _class: JClass<'l>,
+    data: jni::objects::JShortArray<'l>,
+    count: jni::sys::jint,
+) {
+    let count = count.max(0) as usize;
+    let mut buf = vec![0i16; count];
+    if count > 0 && env.get_short_array_region(&data, 0, &mut buf).is_ok() {
+        horizon_client::android_runtime::host_mic_push(&buf);
+    }
+}
+/// CS voice chat: the host's microphone state (0 idle, 1 recording, 2 failed).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_craftstudio_cslauncher_engine_horizon_HorizonNative_nativeHostMicState<'l>(
+    _env: JNIEnv<'l>,
+    _class: JClass<'l>,
+    state: jni::sys::jint,
+) {
+    horizon_client::android_runtime::host_mic_set_state(state.clamp(0, 2) as u8);
+}
+
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_craftstudio_cslauncher_engine_horizon_HorizonNative_nativeHostSkin<'l>(
     mut env: JNIEnv<'l>,
@@ -761,6 +785,9 @@ pub extern "system" fn Java_com_craftstudio_cslauncher_engine_horizon_HorizonNat
     }
     if horizon_client::android_runtime::host_take_mic_request() {
         flags |= 8;
+    }
+    if horizon_client::android_runtime::host_mic_wanted() {
+        flags |= 16;
     }
     flags
 }

@@ -100,7 +100,6 @@ pub struct CsVoice {
     /// Why the microphone isn't open, for the Voice tab.
     pub mic_problem: Option<String>,
     mic_retry: Option<Instant>,
-    permission_asked: bool,
     /// Captured samples not yet a whole frame.
     pending: Vec<i16>,
     seq: u16,
@@ -125,7 +124,6 @@ impl Default for CsVoice {
             mic: None,
             mic_problem: None,
             mic_retry: None,
-            permission_asked: false,
             pending: Vec::new(),
             seq: 0,
             talking: false,
@@ -251,13 +249,20 @@ impl Game<'_> {
                     self.cs_voice.mic_problem = None;
                 }
                 Err(e) => {
-                    if !self.cs_voice.permission_asked {
-                        self.cs_voice.permission_asked = true;
-                        horizon_client::android_runtime::host_request_mic();
-                    }
+                    horizon_client::android_runtime::host_request_mic();
                     self.cs_voice.mic_problem = Some(e);
                 }
             }
+        }
+        // The host's microphone failed (permission denied, no device): try
+        // again later, and say so in the Voice tab.
+        if let Some(problem) = self.cs_voice.mic.as_ref().and_then(|m| m.problem()) {
+            self.cs_voice.mic = None;
+            self.cs_voice.pending.clear();
+            self.cs_voice.talking = false;
+            self.cs_voice.mic_problem = Some(problem);
+            self.cs_voice.mic_retry = Some(Instant::now());
+            return;
         }
         let Some(mic) = &self.cs_voice.mic else {
             return;
