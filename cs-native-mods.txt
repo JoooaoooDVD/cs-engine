@@ -31,7 +31,7 @@ xtoxray
 # Revision-pinned mods (tried on each build, skipped when they no longer apply):
 astral_cruiser
 basic_hud
-biomecompass
+# biomecompass   (pinned to an older engine: custom_name is a Tag now)
 carryblock
 chatheads
 distant_horizons
