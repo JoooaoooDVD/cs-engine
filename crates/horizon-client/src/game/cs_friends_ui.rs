@@ -1,12 +1,13 @@
 //! CS Friends inside the game (CS Launcher Plus): the pause menu's and the
-//! title's Friends button open `cs_friends_screen`; this file ties it to the
+//! title's Friends button open `cs_friends_screen` (its Friends, Chat, Host
+//! World and Voice Chat pages; key V opens Voice Chat); this file ties it to the
 //! backend client (`horizon_client::cs_friends`), the world (presence, Join,
 //! Invite, the Host tab's publish / MOTD / icon) and the player's attention
 //! (chat lines, toasts, the launcher's system notifications).
 use super::{Game, Screen};
 use horizon_client::{
     cs_friends::{Client, Notice},
-    cs_friends_screen::{self as screen, Action, Focus, HostView, Tab, View},
+    cs_friends_screen::{self as screen, Action, Focus, GroupRow, HostView, Knob, Tab, View},
     hud::HudBatch,
     text::Text,
     toasts::SystemToast,
@@ -86,6 +87,7 @@ impl Game<'_> {
             self.cs_friends_ui.max_players = b.max_players;
         }
         let (status, address, world) = self.cs_presence();
+        self.cs_host_status();
         let chat_open = self.screen == Screen::Friends
             && self.cs_friends_ui.tab == Tab::Chat
             && self.cs_friends_ui.chat_with.is_some();
@@ -135,6 +137,40 @@ impl Game<'_> {
         }
     }
 
+    /// The launcher's Discord Rich Presence and play time follow the engine:
+    /// what the player is doing, for `nativeHostStatus`.
+    fn cs_host_status(&self) {
+        if !horizon_client::android_runtime::host_mode() {
+            return;
+        }
+        let (scene, world, server, players) = if self.title.is_some() {
+            ("menu", String::new(), String::new(), 0)
+        } else {
+            let players = self.remote.as_ref().map_or(1, |r| r.player_count().max(1));
+            let published = self.e4mc.as_ref().and_then(|s| s.inner.address()).is_some()
+                || self.lan.is_some()
+                || self.integrated.as_ref().is_some_and(|s| s.published().is_some());
+            if self.external_server() {
+                (
+                    "multiplayer",
+                    String::new(),
+                    self.server_address().unwrap_or_default().to_owned(),
+                    players,
+                )
+            } else if published {
+                ("hosting", self.level.name.clone(), String::new(), players)
+            } else {
+                ("singleplayer", self.level.name.clone(), String::new(), players)
+            }
+        };
+        let clean = |s: &str| s.replace(['\t', '\n'], " ");
+        horizon_client::android_runtime::host_set_status(&format!(
+            "{scene}\t{}\t{}\t{players}",
+            clean(&world),
+            clean(&server)
+        ));
+    }
+
     /// A chat line, a toast, and (for invites) the launcher's notification.
     fn cs_notice(&mut self, notice: Notice) {
         let line = if notice.text.is_empty() {
@@ -160,6 +196,9 @@ impl Game<'_> {
 
     /// Open the screen (pause menu's or title's Friends button).
     pub(super) fn open_cs_friends(&mut self) {
+        if self.screen != Screen::Friends {
+            self.cs_friends_ui.anim.page_changed();
+        }
         self.screen = Screen::Friends;
         self.cs_friends_ui.focus = Focus::None;
         self.cs_friends_ui.confirm_remove = None;
@@ -173,12 +212,11 @@ impl Game<'_> {
             self.capture(false);
         }
     }
-    /// The voice menu (key V, `key.cs_voice_menu`): the Friends screen on
-    /// its Voice tab — groups to create, join or leave, players to mute.
+    /// The voice menu (key V, `key.cs_voice_menu`): the Voice Chat page —
+    /// groups to create, join or leave, invites, players to mute.
     pub(super) fn open_cs_voice_menu(&mut self) {
         self.open_cs_friends();
-        self.cs_friends_ui.tab = screen::Tab::Voice;
-        self.cs_friends_ui.scroll = 0;
+        self.cs_friends_ui.go(Tab::Voice);
     }
     /// Done / Escape: back to the pause menu, or the title.
     fn close_cs_friends(&mut self) {
@@ -191,7 +229,7 @@ impl Game<'_> {
         };
     }
 
-    fn cs_view(&self) -> View {
+    fn cs_view(&mut self) -> View {
         let mut view = View {
             blink: self.started.elapsed().as_millis() / 500 % 2 == 0,
             copied: self
@@ -227,8 +265,31 @@ impl Game<'_> {
             None => (None, 0, None, false),
         };
         {
-            let v = &self.cs_voice;
+            self.cs_voice_tidy();
             let in_world = self.title.is_none();
+            let groups: Vec<GroupRow> = self
+                .cs_voice_groups()
+                .into_iter()
+                .map(|(name, locked, members, mine)| GroupRow {
+                    name,
+                    locked,
+                    members,
+                    mine,
+                })
+                .collect();
+            // The players list leaves out the player's own group (they are on its card).
+            let members: Vec<String> = groups
+                .iter()
+                .find(|g| g.mine)
+                .map(|g| g.members.iter().map(|m| m.0.to_lowercase()).collect())
+                .unwrap_or_default();
+            let players: Vec<(String, bool, bool)> = self
+                .cs_voice_players()
+                .into_iter()
+                .filter(|(n, _, _)| !members.contains(&n.to_lowercase()))
+                .collect();
+            let invitable = self.cs_voice_invitable();
+            let v = &self.cs_voice;
             view.voice = screen::VoiceView {
                 enabled: v.settings.enabled,
                 ptt: v.settings.ptt,
@@ -243,10 +304,17 @@ impl Game<'_> {
                 in_world,
                 mic_problem: v.mic_problem.clone(),
                 talking: v.talking,
-                level: v.level,
-                players: self.cs_voice_players(),
+                level: v.level_smooth,
+                players,
                 group: self.cs_voice_my_group().map(str::to_owned),
-                groups: self.cs_voice_groups(),
+                groups,
+                invites: v
+                    .invites
+                    .iter()
+                    .map(|i| (i.from_name.clone(), i.group.clone()))
+                    .collect(),
+                invitable,
+                notice: v.notice.as_ref().map(|(t, p, _)| (t.clone(), *p)),
             };
         }
         view.host = HostView {
@@ -268,6 +336,24 @@ impl Game<'_> {
 
     pub(super) fn draw_cs_friends(&mut self, batch: &mut HudBatch) {
         let view = self.cs_view();
+        // The animations: the eased values chase the voice state, the hover
+        // glow follows the cursor from button to button.
+        {
+            let (enabled, ptt, talking, level) = (
+                view.voice.enabled,
+                view.voice.ptt,
+                view.voice.talking,
+                view.voice.level,
+            );
+            self.cs_friends_ui.anim.tick(enabled, ptt, talking, level);
+            let over = screen::hovered_box(&self.gui.atlas, self.gui_size(), self.cursor, &self.cs_friends_ui, &view);
+            let anim = &mut self.cs_friends_ui.anim;
+            match (over, anim.hover) {
+                (Some(b), Some((was, _))) if was == b => {}
+                (Some(b), _) => anim.hover = Some((b, 0.0)),
+                (None, _) => anim.hover = None,
+            }
+        }
         screen::draw(
             batch,
             &self.gui.atlas,
@@ -280,7 +366,7 @@ impl Game<'_> {
 
     pub(super) fn cs_friends_click(&mut self) {
         let view = self.cs_view();
-        let Some(action) = screen::click(
+        let Some((action, rect)) = screen::click(
             &self.gui.atlas,
             self.gui_size(),
             self.cursor,
@@ -291,6 +377,7 @@ impl Game<'_> {
         };
         if !matches!(action, Action::Focus(_)) {
             self.audio.play_button_click();
+            self.cs_friends_ui.anim.press(rect);
         }
         self.cs_friends_action(action, &view);
     }
@@ -302,11 +389,7 @@ impl Game<'_> {
         }
         match action {
             Action::Focus(focus) => ui.focus = focus,
-            Action::Tab(tab) => {
-                ui.tab = tab;
-                ui.scroll = 0;
-                ui.focus = Focus::None;
-            }
+            Action::Tab(tab) => ui.go(tab),
             Action::Scroll(by) => {
                 let range = screen::scroll_range(&self.gui.atlas, self.gui_size(), &self.cs_friends_ui, view);
                 let ui = &mut self.cs_friends_ui;
@@ -378,7 +461,7 @@ impl Game<'_> {
             }
             Action::Join(address) => self.cs_join(&address),
             Action::OpenChat(id) => {
-                ui.tab = Tab::Chat;
+                ui.go(Tab::Chat);
                 ui.chat_with = Some(id.clone());
                 ui.focus = Focus::Chat;
                 ui.scroll = 0;
@@ -416,32 +499,65 @@ impl Game<'_> {
                 self.cs_voice.settings.ptt = !self.cs_voice.settings.ptt;
                 self.cs_voice_save();
             }
-            Action::VoiceVolume(step) => {
+            Action::VoiceSet(knob, value) => {
                 let s = &mut self.cs_voice.settings;
-                s.volume = (s.volume as i32 + step * 10).clamp(0, 200) as u32;
-                self.cs_voice_save();
-            }
-            Action::VoiceMic(step) => {
-                let s = &mut self.cs_voice.settings;
-                s.mic = (s.mic as i32 + step * 25).clamp(50, 300) as u32;
-                self.cs_voice_save();
-            }
-            Action::VoiceRange(step) => {
-                let s = &mut self.cs_voice.settings;
-                s.range = (s.range as i32 + step * 8).clamp(8, 256) as u32;
+                let value = value.clamp(0.0, 1.0);
+                match knob {
+                    // Steps of 5 %, 5 % and 4 blocks: the handle snaps as it goes.
+                    Knob::Volume => s.volume = ((value * 200.0 / 5.0).round() * 5.0) as u32,
+                    Knob::Mic => s.mic = (50.0 + (value * 250.0 / 5.0).round() * 5.0) as u32,
+                    Knob::Range => s.range = (8.0 + (value * 248.0 / 4.0).round() * 4.0) as u32,
+                }
+                s.volume = s.volume.clamp(0, 200);
+                s.mic = s.mic.clamp(50, 300);
+                s.range = s.range.clamp(8, 256);
                 self.cs_voice_save();
             }
             Action::VoiceMute(name) => self.cs_voice_toggle_mute(&name),
-            Action::VoiceGroupJoin(name) => {
-                let name = if name.is_empty() {
-                    std::mem::take(&mut self.cs_friends_ui.group_name)
-                } else {
-                    name
-                };
+            Action::VoiceGroupCreate => {
+                let name = std::mem::take(&mut self.cs_friends_ui.group_name);
+                let password = std::mem::take(&mut self.cs_friends_ui.password);
                 self.cs_friends_ui.focus = Focus::None;
-                self.cs_voice_group_join(&name);
+                self.cs_voice_group_create(&name, &password);
             }
-            Action::VoiceGroupLeave => self.cs_voice_group_leave(),
+            Action::VoiceGroupJoin(name) => {
+                // The password typed goes with a locked group's join; an open
+                // group needs none.
+                let password = if self.cs_friends_ui.join_target.as_deref() == Some(name.as_str()) {
+                    std::mem::take(&mut self.cs_friends_ui.password)
+                } else {
+                    String::new()
+                };
+                self.cs_friends_ui.join_target = None;
+                self.cs_friends_ui.focus = Focus::None;
+                self.cs_voice_group_join(&name, &password);
+            }
+            Action::VoiceAskPassword(name) => {
+                ui.join_target = Some(name);
+                ui.password.clear();
+                ui.focus = Focus::Password;
+                ui.inviting = false;
+            }
+            Action::VoiceCancelPassword => {
+                ui.join_target = None;
+                ui.password.clear();
+                ui.focus = Focus::None;
+            }
+            Action::VoiceGroupLeave => {
+                ui.inviting = false;
+                self.cs_voice_group_leave();
+            }
+            Action::VoiceInviteToggle => {
+                ui.inviting = !ui.inviting;
+                ui.focus = Focus::None;
+            }
+            Action::VoiceInvite(name) => self.cs_voice_invite(&name),
+            Action::VoiceInviteAccept(i) => {
+                ui.inviting = false;
+                ui.join_target = None;
+                self.cs_voice_invite_accept(i);
+            }
+            Action::VoiceInviteDismiss(i) => self.cs_voice_invite_dismiss(i),
             Action::Players(step) => {
                 // 2, 4, 6, 8, 10, 12, 16, 20, 24, 32.
                 const STEPS: [usize; 10] = [2, 4, 6, 8, 10, 12, 16, 20, 24, 32];
@@ -551,10 +667,14 @@ impl Game<'_> {
 
     /// Escape / Back: leave the field, then the conversation, then the screen.
     pub(super) fn cs_friends_escape(&mut self) {
-        if self.cs_friends_ui.focus != Focus::None {
-            self.cs_friends_ui.focus = Focus::None;
-        } else if self.cs_friends_ui.chat_with.is_some() && self.cs_friends_ui.tab == Tab::Chat {
-            self.cs_friends_ui.chat_with = None;
+        let ui = &mut self.cs_friends_ui;
+        if ui.focus != Focus::None {
+            ui.focus = Focus::None;
+        } else if ui.join_target.is_some() || ui.inviting {
+            ui.join_target = None;
+            ui.inviting = false;
+        } else if ui.chat_with.is_some() && ui.tab == Tab::Chat {
+            ui.chat_with = None;
         } else {
             self.close_cs_friends();
         }
@@ -630,7 +750,15 @@ impl Game<'_> {
                     }
                     Focus::Group => {
                         let view = self.cs_view();
-                        self.cs_friends_action(Action::VoiceGroupJoin(String::new()), &view);
+                        self.cs_friends_action(Action::VoiceGroupCreate, &view);
+                    }
+                    Focus::Password => {
+                        let action = match ui.join_target.clone() {
+                            Some(name) => Action::VoiceGroupJoin(name),
+                            None => Action::VoiceGroupCreate,
+                        };
+                        let view = self.cs_view();
+                        self.cs_friends_action(action, &view);
                     }
                     Focus::None => {}
                 }
@@ -675,7 +803,7 @@ impl Game<'_> {
     }
 
     /// The focused field's box for the IME.
-    pub(super) fn cs_friends_focused_box(&self) -> Option<[f32; 4]> {
+    pub(super) fn cs_friends_focused_box(&mut self) -> Option<[f32; 4]> {
         let view = self.cs_view();
         screen::focused_box(&self.gui.atlas, self.gui_size(), &self.cs_friends_ui, &view)
     }

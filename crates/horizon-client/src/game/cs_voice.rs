@@ -14,10 +14,13 @@
 //! - A client that receives one feeds it to the mixer, where it plays from the
 //!   speaker's position: quieter with distance, panned left or right.
 //!
-//! - Groups: a player creates or joins a named group (the voice menu, key V).
-//!   Members hear each other from anywhere in the world — any distance, any
-//!   dimension, at full volume — while the players nearby still hear them as
-//!   before. The server keeps the groups and tells every client the roster.
+//! - Groups (as the Simple Voice Chat mod has them): a player creates a group
+//!   with a name and, if they like, a password (the voice menu, key V); others
+//!   join it by name and password, or on an invite from a member, which needs
+//!   none. Members hear each other from anywhere in the world — any distance,
+//!   any dimension, at full volume — while the players nearby still hear them
+//!   as before. Any player can be muted, in the group or nearby. The server
+//!   keeps the groups and tells every client the roster.
 //!
 //! Settings live in `cs-voice.json` next to the CS Friends identity (shared
 //! by every profile).
@@ -39,14 +42,29 @@ const TO_SERVER: u8 = 1;
 /// Clientbound: `[2][uuid 16][x f32][y f32][z f32][range u16][seq u16][frame…]`;
 /// range 0 means a group voice (heard anywhere, full volume).
 const TO_CLIENT: u8 = 2;
-/// Serverbound group request: `[3][op][name utf-8…]`, `op` 1 = create or
-/// join `name`, 2 = leave, 3 = send me the roster.
+/// Serverbound group request: `[3][op]…` — op 1 create `[len u8][name][password…]`,
+/// 2 leave, 3 send me the roster, 4 join `[len u8][name][password…]` (an invited
+/// player needs no password), 5 invite `[uuid 16]` to the sender's group.
 const TO_SERVER_GROUP: u8 = 3;
-/// Clientbound roster: `[4][groups u8]{[len u8][name…][members u8]{uuid 16}…}…`.
+/// Clientbound roster: `[4][groups u8]{[len u8][name…][flags u8][members u8]{uuid 16}…}…`;
+/// flags bit 0 = the group has a password.
 const TO_CLIENT_GROUPS: u8 = 4;
-const GROUP_JOIN: u8 = 1;
+/// Clientbound notice: `[5][kind u8][text…]`, kind 0 = info, 1 = a problem.
+const TO_CLIENT_NOTICE: u8 = 5;
+/// Clientbound invite: `[6][from uuid 16][group name…]`.
+const TO_CLIENT_INVITE: u8 = 6;
+const GROUP_CREATE: u8 = 1;
 const GROUP_LEAVE: u8 = 2;
 const GROUP_LIST: u8 = 3;
+const GROUP_JOIN: u8 = 4;
+const GROUP_INVITE: u8 = 5;
+const GROUP_LOCKED: u8 = 1;
+/// A group password is at most this many characters.
+pub const GROUP_PASSWORD_MAX: usize = 24;
+/// An invite waits this long in the voice menu.
+const INVITE_TTL: Duration = Duration::from_secs(90);
+/// A notice stays in the voice menu this long.
+const NOTICE_TTL: Duration = Duration::from_secs(6);
 /// A group name is at most this many characters.
 pub const GROUP_NAME_MAX: usize = 24;
 /// Speaking (push-to-talk) is this key's mapping, `key.cs_voice`, default B
@@ -139,14 +157,21 @@ pub struct CsVoice {
     speaking: HashMap<u128, (Instant, Instant)>,
     /// The frames' encoder, carrying its state while the player talks.
     encoder: Encoder,
-    /// The groups in this world, as the server last told them: name, members.
-    pub groups: Vec<(String, Vec<u128>)>,
-    /// The group the player asked for (joined again on the next world).
-    pub wanted_group: Option<String>,
+    /// The groups in this world, as the server last told them.
+    pub groups: Vec<GroupInfo>,
+    /// The group the player asked for, name and password (joined again on
+    /// the next world).
+    pub wanted_group: Option<(String, String)>,
     /// The roster was asked for (and the wanted group joined) on this connection.
     synced: bool,
-    /// Server side: the groups, name to members.
-    srv_groups: Vec<(String, Vec<u128>)>,
+    /// Invites to groups the player received, newest last.
+    pub invites: Vec<VoiceInvite>,
+    /// The server's last word on a group request (text, a problem, when).
+    pub notice: Option<(String, bool, Instant)>,
+    /// The microphone level eased for the meters (0 to 1).
+    pub level_smooth: f32,
+    /// Server side: the groups.
+    srv_groups: Vec<Group>,
     /// Server side: frames relayed this session (a diagnostic).
     pub relayed: u64,
     /// Server side: when the settings file was last read (the host's range).
@@ -171,11 +196,44 @@ impl Default for CsVoice {
             groups: Vec::new(),
             wanted_group: None,
             synced: false,
+            invites: Vec::new(),
+            notice: None,
+            level_smooth: 0.0,
             srv_groups: Vec::new(),
             relayed: 0,
             reloaded: None,
         }
     }
+}
+
+/// A group as the clients know it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GroupInfo {
+    pub name: String,
+    /// Joining needs the password (or an invite).
+    pub locked: bool,
+    pub members: Vec<u128>,
+}
+/// A group as the server keeps it.
+#[derive(Clone, Debug, Default)]
+struct Group {
+    name: String,
+    /// Empty: anyone joins by name.
+    password: String,
+    members: Vec<u128>,
+    /// Players a member invited: they join without the password.
+    invited: Vec<u128>,
+}
+/// A group for the voice menu: name, locked, members (name, speaking now,
+/// muted), the player's own.
+pub type GroupView = (String, bool, Vec<(String, bool, bool)>, bool);
+/// An invite to a group, received by the client.
+#[derive(Clone, Debug)]
+pub struct VoiceInvite {
+    pub from: u128,
+    pub from_name: String,
+    pub group: String,
+    pub at: Instant,
 }
 
 /// A clientbound voice payload.
@@ -206,21 +264,22 @@ fn parse_to_client(data: &[u8]) -> Option<Incoming> {
 }
 
 /// The roster as the clients receive it.
-fn encode_roster(groups: &[(String, Vec<u128>)]) -> Vec<u8> {
+fn encode_roster(groups: &[Group]) -> Vec<u8> {
     let mut out = vec![TO_CLIENT_GROUPS, groups.len().min(255) as u8];
-    for (name, members) in groups.iter().take(255) {
-        let name = name.as_bytes();
+    for g in groups.iter().take(255) {
+        let name = g.name.as_bytes();
         let n = name.len().min(255);
         out.push(n as u8);
         out.extend_from_slice(&name[..n]);
-        out.push(members.len().min(255) as u8);
-        for m in members.iter().take(255) {
+        out.push(if g.password.is_empty() { 0 } else { GROUP_LOCKED });
+        out.push(g.members.len().min(255) as u8);
+        for m in g.members.iter().take(255) {
             out.extend_from_slice(&m.to_be_bytes());
         }
     }
     out
 }
-fn parse_roster(data: &[u8]) -> Option<Vec<(String, Vec<u128>)>> {
+fn parse_roster(data: &[u8]) -> Option<Vec<GroupInfo>> {
     if data.len() < 2 || data[0] != TO_CLIENT_GROUPS {
         return None;
     }
@@ -230,6 +289,8 @@ fn parse_roster(data: &[u8]) -> Option<Vec<(String, Vec<u128>)>> {
         let n = *data.get(i)? as usize;
         let name = String::from_utf8_lossy(data.get(i + 1..i + 1 + n)?).into_owned();
         i += 1 + n;
+        let flags = *data.get(i)?;
+        i += 1;
         let m = *data.get(i)? as usize;
         i += 1;
         let mut members = Vec::with_capacity(m);
@@ -237,9 +298,43 @@ fn parse_roster(data: &[u8]) -> Option<Vec<(String, Vec<u128>)>> {
             members.push(u128::from_be_bytes(data.get(i..i + 16)?.try_into().ok()?));
             i += 16;
         }
-        groups.push((name, members));
+        groups.push(GroupInfo {
+            name,
+            locked: flags & GROUP_LOCKED != 0,
+            members,
+        });
     }
     Some(groups)
+}
+/// A group request's name and password: `[len u8][name][password…]`.
+fn encode_named(op: u8, name: &str, password: &str) -> Vec<u8> {
+    let name = name.as_bytes();
+    let n = name.len().min(255);
+    let mut out = vec![TO_SERVER_GROUP, op, n as u8];
+    out.extend_from_slice(&name[..n]);
+    out.extend_from_slice(password.as_bytes());
+    out
+}
+fn parse_named(data: &[u8]) -> Option<(String, String)> {
+    let n = *data.first()? as usize;
+    let name = String::from_utf8_lossy(data.get(1..1 + n)?).into_owned();
+    let password = String::from_utf8_lossy(data.get(1 + n..)?).into_owned();
+    Some((name, password))
+}
+fn encode_notice(problem: bool, text: &str) -> Vec<u8> {
+    let mut out = vec![TO_CLIENT_NOTICE, u8::from(problem)];
+    out.extend_from_slice(text.as_bytes());
+    out
+}
+/// A password as typed, cleaned: no control characters, at most
+/// [`GROUP_PASSWORD_MAX`] characters.
+pub fn clean_password(password: &str) -> String {
+    password
+        .trim()
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(GROUP_PASSWORD_MAX)
+        .collect()
 }
 /// A group name as typed, cleaned: trimmed, one space between words, at
 /// most [`GROUP_NAME_MAX`] characters; `None` when nothing is left.
@@ -327,12 +422,14 @@ impl Game<'_> {
             }
             self.cs_voice.talking = false;
             self.cs_voice.level = 0.0;
+            self.cs_voice.level_smooth *= 0.8;
             self.cs_voice.synced = false;
             if self.title.is_some() {
                 self.audio.voice_clear();
                 self.cs_voice.heard.clear();
                 self.cs_voice.speaking.clear();
                 self.cs_voice.groups.clear();
+                self.cs_voice.invites.clear();
             }
             return;
         }
@@ -340,8 +437,10 @@ impl Game<'_> {
         if !self.cs_voice.synced {
             self.cs_voice.synced = true;
             self.cs_voice.groups.clear();
+            self.cs_voice.invites.clear();
             match self.cs_voice.wanted_group.clone() {
-                Some(name) => self.cs_voice_group_send(GROUP_JOIN, &name),
+                // Back in a world: the group again, created if it is gone.
+                Some((name, password)) => self.cs_voice_group_named(GROUP_JOIN, &name, &password),
                 None => self.cs_voice_group_send(GROUP_LIST, ""),
             }
         }
@@ -383,6 +482,12 @@ impl Game<'_> {
         let samples = mic.take(gain);
         self.cs_voice.level = mic.level().min(1.0);
         let peak = self.cs_voice.level;
+        let eased = self.cs_voice.level_smooth;
+        self.cs_voice.level_smooth = if peak > eased {
+            eased + (peak - eased) * 0.5
+        } else {
+            eased + (peak - eased) * 0.12
+        };
         self.cs_voice.pending.extend_from_slice(&samples);
         let send = self.cs_voice_wants_to_send(peak);
         if !send {
@@ -447,42 +552,111 @@ impl Game<'_> {
             .as_ref()
             .map(|h| h.hub.guests.iter().map(|g| g.uuid).collect())
             .unwrap_or_default();
-        let before: usize = self.cs_voice.srv_groups.iter().map(|(_, m)| m.len()).sum();
-        for (_, members) in &mut self.cs_voice.srv_groups {
-            members.retain(|u| present.contains(u));
+        let before: usize = self.cs_voice.srv_groups.iter().map(|g| g.members.len()).sum();
+        for g in &mut self.cs_voice.srv_groups {
+            g.members.retain(|u| present.contains(u));
         }
-        self.cs_voice.srv_groups.retain(|(_, m)| !m.is_empty());
-        let after: usize = self.cs_voice.srv_groups.iter().map(|(_, m)| m.len()).sum();
+        self.cs_voice.srv_groups.retain(|g| !g.members.is_empty());
+        let after: usize = self.cs_voice.srv_groups.iter().map(|g| g.members.len()).sum();
         before != after
     }
+    /// Server side: a word to one player about their request.
+    fn cs_voice_notice(&mut self, player: u128, problem: bool, text: &str) {
+        let _ = self.native_net_send_to_player(player, CHANNEL, &encode_notice(problem, text));
+    }
+    /// Server side: `player` leaves whatever group they are in.
+    fn cs_voice_srv_leave(&mut self, player: u128) {
+        for g in &mut self.cs_voice.srv_groups {
+            g.members.retain(|u| *u != player);
+        }
+        self.cs_voice.srv_groups.retain(|g| !g.members.is_empty());
+    }
     /// Server side: a client's group request.
-    fn cs_voice_group_request(&mut self, player: u128, op: u8, name: &str) {
+    fn cs_voice_group_request(&mut self, player: u128, op: u8, data: &[u8]) {
         let changed = self.cs_voice_prune_groups();
         match op {
-            GROUP_JOIN => {
-                let Some(name) = clean_group_name(name) else {
+            GROUP_CREATE => {
+                let Some((name, password)) = parse_named(data) else {
                     return;
                 };
-                for (_, members) in &mut self.cs_voice.srv_groups {
-                    members.retain(|u| *u != player);
+                let Some(name) = clean_group_name(&name) else {
+                    self.cs_voice_notice(player, true, "Give the group a name.");
+                    return;
+                };
+                let password = clean_password(&password);
+                if self.cs_voice.srv_groups.iter().any(|g| g.name.eq_ignore_ascii_case(&name)) {
+                    self.cs_voice_notice(player, true, &format!("There is a group called {name} already — join it, or pick another name."));
+                    return;
                 }
-                self.cs_voice.srv_groups.retain(|(_, m)| !m.is_empty());
-                match self
+                self.cs_voice_srv_leave(player);
+                self.cs_voice.srv_groups.push(Group {
+                    name: name.clone(),
+                    password,
+                    members: vec![player],
+                    invited: Vec::new(),
+                });
+                self.cs_voice_notice(player, false, &format!("Group {name} created. Invite players from the voice menu."));
+                self.cs_voice_send_roster(None);
+            }
+            GROUP_JOIN => {
+                let Some((name, password)) = parse_named(data) else {
+                    return;
+                };
+                let Some(name) = clean_group_name(&name) else {
+                    return;
+                };
+                let password = clean_password(&password);
+                let found = self
+                    .cs_voice
+                    .srv_groups
+                    .iter()
+                    .position(|g| g.name.eq_ignore_ascii_case(&name));
+                let Some(index) = found else {
+                    // Gone (everyone left) or never there: the player's own
+                    // group of that name — a rejoin after a reconnect keeps
+                    // its password.
+                    self.cs_voice_srv_leave(player);
+                    self.cs_voice.srv_groups.push(Group {
+                        name: name.clone(),
+                        password,
+                        members: vec![player],
+                        invited: Vec::new(),
+                    });
+                    self.cs_voice_notice(player, false, &format!("Group {name} created."));
+                    self.cs_voice_send_roster(None);
+                    return;
+                };
+                let group = &self.cs_voice.srv_groups[index];
+                if group.members.contains(&player) {
+                    self.cs_voice_send_roster(Some(player));
+                    return;
+                }
+                let invited = group.invited.contains(&player);
+                let (locked, right) = (!group.password.is_empty(), group.password == password);
+                if locked && !invited && !right {
+                    let text = if password.is_empty() {
+                        format!("{name} needs a password.")
+                    } else {
+                        format!("Wrong password for {name}.")
+                    };
+                    self.cs_voice_notice(player, true, &text);
+                    return;
+                }
+                self.cs_voice_srv_leave(player);
+                if let Some(g) = self
                     .cs_voice
                     .srv_groups
                     .iter_mut()
-                    .find(|(n, _)| n.eq_ignore_ascii_case(&name))
+                    .find(|g| g.name.eq_ignore_ascii_case(&name))
                 {
-                    Some((_, members)) => members.push(player),
-                    None => self.cs_voice.srv_groups.push((name, vec![player])),
+                    g.members.push(player);
+                    g.invited.retain(|u| *u != player);
                 }
+                self.cs_voice_notice(player, false, &format!("You joined {name}."));
                 self.cs_voice_send_roster(None);
             }
             GROUP_LEAVE => {
-                for (_, members) in &mut self.cs_voice.srv_groups {
-                    members.retain(|u| *u != player);
-                }
-                self.cs_voice.srv_groups.retain(|(_, m)| !m.is_empty());
+                self.cs_voice_srv_leave(player);
                 self.cs_voice_send_roster(None);
             }
             GROUP_LIST => {
@@ -490,6 +664,39 @@ impl Game<'_> {
                     self.cs_voice_send_roster(None);
                 } else {
                     self.cs_voice_send_roster(Some(player));
+                }
+            }
+            GROUP_INVITE => {
+                let Some(who) = data.get(..16).and_then(|b| b.try_into().ok()).map(u128::from_be_bytes) else {
+                    return;
+                };
+                let found = self.cs_voice.srv_groups.iter().position(|g| g.members.contains(&player));
+                let Some(index) = found else {
+                    self.cs_voice_notice(player, true, "Create or join a group first.");
+                    return;
+                };
+                let group = &mut self.cs_voice.srv_groups[index];
+                if group.members.contains(&who) {
+                    return;
+                }
+                if !group.invited.contains(&who) {
+                    group.invited.push(who);
+                }
+                let name = group.name.clone();
+                let mut payload = vec![TO_CLIENT_INVITE];
+                payload.extend_from_slice(&player.to_be_bytes());
+                payload.extend_from_slice(name.as_bytes());
+                let sent = self.native_net_send_to_player(who, CHANNEL, &payload).is_ok();
+                let target = self
+                    .lan
+                    .as_ref()
+                    .and_then(|h| h.hub.guests.iter().find(|g| g.uuid == who))
+                    .map(|g| g.name.clone())
+                    .unwrap_or_else(|| "the player".to_owned());
+                if sent {
+                    self.cs_voice_notice(player, false, &format!("{target} was invited to {name}."));
+                } else {
+                    self.cs_voice_notice(player, true, &format!("{target} can't be reached right now."));
                 }
             }
             _ => {}
@@ -505,8 +712,7 @@ impl Game<'_> {
             return false;
         }
         if data.len() >= 2 && data[0] == TO_SERVER_GROUP {
-            let name = String::from_utf8_lossy(&data[2..]).into_owned();
-            self.cs_voice_group_request(player, data[1], &name);
+            self.cs_voice_group_request(player, data[1], &data[2..]);
             return true;
         }
         if data.len() < 3 + FRAME_BYTES || data[0] != TO_SERVER {
@@ -553,8 +759,8 @@ impl Game<'_> {
             .cs_voice
             .srv_groups
             .iter()
-            .find(|(_, m)| m.contains(&player))
-            .map(|(_, m)| m.clone())
+            .find(|g| g.members.contains(&player))
+            .map(|g| g.members.clone())
             .unwrap_or_default();
         let reach = f64::from(range) + 8.0;
         let mut group_hearers = Vec::new();
@@ -606,6 +812,46 @@ impl Game<'_> {
         self.cs_voice_load();
         if let Some(groups) = parse_roster(data) {
             self.cs_voice.groups = groups;
+            // In the group now: the invite to it is done with.
+            if let Some(mine) = self.cs_voice_my_group().map(str::to_owned) {
+                self.cs_voice.invites.retain(|i| !i.group.eq_ignore_ascii_case(&mine));
+            }
+            return true;
+        }
+        if data.len() >= 2 && data[0] == TO_CLIENT_NOTICE {
+            let text = String::from_utf8_lossy(&data[2..]).into_owned();
+            let problem = data[1] != 0;
+            if self.screen != Screen::Friends {
+                let color = if problem { "§c" } else { "§a" };
+                self.system_message(horizon_client::text::Text::literal(format!("§b[Voice]§r {color}{text}")));
+            }
+            self.cs_voice.notice = Some((text, problem, Instant::now()));
+            return true;
+        }
+        if data.len() >= 17 && data[0] == TO_CLIENT_INVITE {
+            let from = u128::from_be_bytes(data[1..17].try_into().unwrap_or([0; 16]));
+            let group = String::from_utf8_lossy(&data[17..]).into_owned();
+            let from_name = self
+                .remote
+                .as_ref()
+                .and_then(|r| r.players.get(&from).cloned())
+                .unwrap_or_else(|| "A player".to_owned());
+            if !from_name.is_empty() && self.cs_voice.settings.is_muted(&from_name) {
+                return true;
+            }
+            self.cs_voice.invites.retain(|i| i.from != from);
+            self.cs_voice.invites.push(VoiceInvite {
+                from,
+                from_name: from_name.clone(),
+                group: group.clone(),
+                at: Instant::now(),
+            });
+            if self.cs_voice.invites.len() > 6 {
+                self.cs_voice.invites.remove(0);
+            }
+            self.system_message(horizon_client::text::Text::literal(format!(
+                "§b[Voice]§r §e{from_name}§r invited you to the group §e{group}§r — press V to join."
+            )));
             return true;
         }
         if !self.cs_voice.settings.enabled {
@@ -641,14 +887,32 @@ impl Game<'_> {
             log::debug!("CS voice: group request not sent: {e}");
         }
     }
-    /// Create or join the group `name` (the voice menu).
-    pub(super) fn cs_voice_group_join(&mut self, name: &str) {
+    fn cs_voice_group_named(&mut self, op: u8, name: &str, password: &str) {
+        if let Err(e) = self.native_net_send_to_server(CHANNEL, &encode_named(op, name, password)) {
+            log::debug!("CS voice: group request not sent: {e}");
+        }
+    }
+    /// Create the group `name` (the voice menu), with `password` if any.
+    pub(super) fn cs_voice_group_create(&mut self, name: &str, password: &str) {
         let Some(name) = clean_group_name(name) else {
             return;
         };
-        self.cs_voice.wanted_group = Some(name.clone());
+        let password = clean_password(password);
+        self.cs_voice.wanted_group = Some((name.clone(), password.clone()));
         if self.cs_voice_available() {
-            self.cs_voice_group_send(GROUP_JOIN, &name);
+            self.cs_voice_group_named(GROUP_CREATE, &name, &password);
+        }
+    }
+    /// Join the group `name` with `password` (empty for an open group or on
+    /// an invite).
+    pub(super) fn cs_voice_group_join(&mut self, name: &str, password: &str) {
+        let Some(name) = clean_group_name(name) else {
+            return;
+        };
+        let password = clean_password(password);
+        self.cs_voice.wanted_group = Some((name.clone(), password.clone()));
+        if self.cs_voice_available() {
+            self.cs_voice_group_named(GROUP_JOIN, &name, &password);
         }
     }
     /// Leave the group the player is in.
@@ -658,18 +922,53 @@ impl Game<'_> {
             self.cs_voice_group_send(GROUP_LEAVE, "");
         }
     }
+    /// Invite the player called `name` to the group.
+    pub(super) fn cs_voice_invite(&mut self, name: &str) {
+        let Some(uuid) = self.remote.as_ref().and_then(|r| {
+            r.players
+                .iter()
+                .find(|(_, n)| n.eq_ignore_ascii_case(name))
+                .map(|(u, _)| *u)
+        }) else {
+            return;
+        };
+        let mut payload = vec![TO_SERVER_GROUP, GROUP_INVITE];
+        payload.extend_from_slice(&uuid.to_be_bytes());
+        if let Err(e) = self.native_net_send_to_server(CHANNEL, &payload) {
+            log::debug!("CS voice: invite not sent: {e}");
+        }
+    }
+    /// Accept the invite at `index` (the voice menu): join without a password.
+    pub(super) fn cs_voice_invite_accept(&mut self, index: usize) {
+        if index < self.cs_voice.invites.len() {
+            let invite = self.cs_voice.invites.remove(index);
+            self.cs_voice_group_join(&invite.group, "");
+        }
+    }
+    pub(super) fn cs_voice_invite_dismiss(&mut self, index: usize) {
+        if index < self.cs_voice.invites.len() {
+            self.cs_voice.invites.remove(index);
+        }
+    }
+    /// The invites still waiting (old ones go), and the notice still shown.
+    pub(super) fn cs_voice_tidy(&mut self) {
+        self.cs_voice.invites.retain(|i| i.at.elapsed() < INVITE_TTL);
+        if self.cs_voice.notice.as_ref().is_some_and(|(_, _, at)| at.elapsed() > NOTICE_TTL) {
+            self.cs_voice.notice = None;
+        }
+    }
     /// The group the player is in, as the server has it.
     pub(super) fn cs_voice_my_group(&self) -> Option<&str> {
         let own = self.remote.as_ref()?.profile();
         self.cs_voice
             .groups
             .iter()
-            .find(|(_, m)| m.contains(&own))
-            .map(|(n, _)| n.as_str())
+            .find(|g| g.members.contains(&own))
+            .map(|g| g.name.as_str())
     }
-    /// The groups for the voice menu: name, members' names (the player
-    /// marked), whether it is the player's.
-    pub(super) fn cs_voice_groups(&self) -> Vec<(String, Vec<String>, bool)> {
+    /// The groups for the voice menu: name, locked, members (name, speaking
+    /// now, muted; the player first as "You"), whether it is the player's.
+    pub(super) fn cs_voice_groups(&self) -> Vec<GroupView> {
         let Some(r) = self.remote.as_ref() else {
             return Vec::new();
         };
@@ -677,20 +976,50 @@ impl Game<'_> {
         self.cs_voice
             .groups
             .iter()
-            .map(|(name, members)| {
-                let names: Vec<String> = members
+            .map(|g| {
+                let mut names: Vec<(String, bool, bool)> = g
+                    .members
                     .iter()
                     .filter_map(|u| {
                         if *u == own {
-                            Some("You".to_owned())
+                            Some(("You".to_owned(), self.cs_voice.talking, false))
                         } else {
-                            r.players.get(u).cloned()
+                            let n = r.players.get(u)?;
+                            Some((
+                                n.clone(),
+                                self.cs_voice.heard.contains_key(u),
+                                self.cs_voice.settings.is_muted(n),
+                            ))
                         }
                     })
                     .collect();
-                (name.clone(), names, members.contains(&own))
+                names.sort_by(|a, b| (a.0 != "You").cmp(&(b.0 != "You")).then(a.0.to_lowercase().cmp(&b.0.to_lowercase())));
+                (g.name.clone(), g.locked, names, g.members.contains(&own))
             })
             .collect()
+    }
+    /// The players in the world who are not in the player's group (to invite
+    /// them): names, sorted.
+    pub(super) fn cs_voice_invitable(&self) -> Vec<String> {
+        let Some(r) = self.remote.as_ref() else {
+            return Vec::new();
+        };
+        let own = r.profile();
+        let members: Vec<u128> = self
+            .cs_voice
+            .groups
+            .iter()
+            .find(|g| g.members.contains(&own))
+            .map(|g| g.members.clone())
+            .unwrap_or_default();
+        let mut out: Vec<String> = r
+            .players
+            .iter()
+            .filter(|(u, _)| **u != own && !members.contains(u))
+            .map(|(_, n)| n.clone())
+            .collect();
+        out.sort_by_key(|n| n.to_lowercase());
+        out
     }
     /// The speaking icon over `name`'s tag: how long they have been speaking
     /// and its opacity (fading after their last frame), or `None`.
@@ -755,7 +1084,13 @@ impl Game<'_> {
         }
         let mut lines: Vec<(String, u32)> = Vec::new();
         if let Some(group) = self.cs_voice_my_group() {
-            lines.push((format!("Group: {group}"), 0xFFC6_C6CE));
+            let members = self
+                .cs_voice
+                .groups
+                .iter()
+                .find(|g| g.name == group)
+                .map_or(1, |g| g.members.len());
+            lines.push((format!("Group: {group} ({members})"), 0xFFC6_C6CE));
         }
         if self.cs_voice.talking {
             let bars = (self.cs_voice.level * 6.0).round() as usize;
@@ -800,13 +1135,27 @@ mod tests {
     #[test]
     fn the_roster_round_trips_and_group_names_are_cleaned() {
         let groups = vec![
-            ("Raid team".to_owned(), vec![1u128, 2, 3]),
-            ("Ünïcode ✓".to_owned(), vec![u128::MAX]),
-            ("empty".to_owned(), Vec::new()),
+            Group {
+                name: "Raid team".to_owned(),
+                password: "hunter2".to_owned(),
+                members: vec![1u128, 2, 3],
+                invited: vec![9],
+            },
+            Group {
+                name: "Ünïcode ✓".to_owned(),
+                members: vec![u128::MAX],
+                ..Group::default()
+            },
         ];
         let bytes = encode_roster(&groups);
         assert_eq!(bytes[0], TO_CLIENT_GROUPS);
-        assert_eq!(parse_roster(&bytes).expect("a roster"), groups);
+        let parsed = parse_roster(&bytes).expect("a roster");
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].name, "Raid team");
+        assert!(parsed[0].locked);
+        assert_eq!(parsed[0].members, vec![1, 2, 3]);
+        assert!(!parsed[1].locked);
+        assert_eq!(parsed[1].members, vec![u128::MAX]);
         assert!(parse_roster(&bytes[..bytes.len() - 1]).is_none(), "truncated");
         assert!(parse_roster(&[TO_CLIENT, 0]).is_none(), "not a roster");
         assert_eq!(parse_roster(&[TO_CLIENT_GROUPS, 0]), Some(Vec::new()));
@@ -816,6 +1165,11 @@ mod tests {
             clean_group_name(&"x".repeat(50)).map(|n| n.chars().count()),
             Some(GROUP_NAME_MAX)
         );
+        let named = encode_named(GROUP_JOIN, "Raid team", "hunter2");
+        assert_eq!(&named[..2], &[TO_SERVER_GROUP, GROUP_JOIN]);
+        assert_eq!(parse_named(&named[2..]), Some(("Raid team".to_owned(), "hunter2".to_owned())));
+        assert_eq!(parse_named(&encode_named(GROUP_CREATE, "open", "")[2..]), Some(("open".to_owned(), String::new())));
+        assert_eq!(clean_password("  s3cret\u{7}  "), "s3cret");
     }
 
     #[test]

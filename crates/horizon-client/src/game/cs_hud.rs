@@ -1,4 +1,4 @@
-//! CS HUD modules (CS Engine, Powered by Craft Studio): the FPS counter, the
+//! CS HUD modules (CS Engine, Powered by Craft Studio): the FPS panel, the
 //! keystrokes and the coordinates panel, built into the game and switched on
 //! the Extras page ("CS HUD modules"). Each is off by default and draws in the
 //! corner the player chose, stacked with the minimap and mods' panels through
@@ -10,7 +10,7 @@ use super::{Game, Screen};
 use horizon_client::{
     extras::Corner,
     extras_hud::{self, Corners},
-    hud::{HudBatch, rgba},
+    hud::{HudAtlas, HudBatch, rgba},
 };
 use winit::keyboard::KeyCode;
 
@@ -56,31 +56,13 @@ impl Game<'_> {
         let fps_place = placed(self, Module::Fps);
         if fps && visible(fps_corner, fps_place) {
             let (rate, min, low) = self.frame_reading();
-            let color: u32 = match rate {
-                0..=24 => 0xFF5555,
-                25..=49 => 0xFFFF55,
-                _ => 0x55FF55,
-            };
-            let line = format!("FPS: {rate}");
-            let lows = format!("Min {min} · 1% low {low}");
-            let atlas = &self.gui.atlas;
             let start = batch.vertices.len();
             let mut scratch = scratch_corners();
             let (target, corner) = match fps_place {
                 Some(_) => (&mut scratch, Corner::TopLeft),
                 None => (&mut *corners, fps_corner),
             };
-            if fps_lows {
-                extras_hud::draw_lines(
-                    batch,
-                    atlas,
-                    target,
-                    corner,
-                    &[(line.as_str(), color), (lows.as_str(), 0xAAAAAA)],
-                );
-            } else {
-                extras_hud::draw_lines(batch, atlas, target, corner, &[(line.as_str(), color)]);
-            }
+            draw_fps_panel(batch, &self.gui.atlas, target, corner, rate, min, low, fps_lows);
             self.cs_hud_place(batch, start, Module::Fps, fps_place);
         }
         let coords_place = placed(self, Module::Coords);
@@ -216,6 +198,50 @@ impl Game<'_> {
 }
 
 /// A corner set a placed module draws into first (top-left, at the margin), before it moves.
+/// The FPS panel — the one FPS read-out of CS Engine, the same in the HUD,
+/// the HUD Editor and every corner: the rate large, "FPS" beside it, a
+/// band along the top in the rate's colour (red under 25, amber under 50,
+/// green from 50), and the slowest frame and 1 % low under it if asked.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn draw_fps_panel(
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    corners: &mut Corners,
+    corner: Corner,
+    rate: u32,
+    min: u32,
+    low: u32,
+    lows: bool,
+) {
+    let color: u32 = match rate {
+        0..=24 => 0xFF5555,
+        25..=49 => 0xFFC84A,
+        _ => 0x5EE08C,
+    };
+    let [_, r, g, b] = color.to_be_bytes();
+    let band = rgba(r, g, b, 255);
+    let ink = rgba(r, g, b, 255);
+    let number = rate.to_string();
+    let number_w = HudBatch::text_width(atlas, &number) * 2.0;
+    let label_w = HudBatch::text_width(atlas, "FPS");
+    let detail = format!("min {min} · 1% low {low}");
+    let detail_w = if lows { HudBatch::text_width(atlas, &detail) } else { 0.0 };
+    let w = (number_w + 3.0 + label_w).max(detail_w) + 10.0;
+    let h = if lows { 32.0 } else { 23.0 };
+    let (x, y) = corners.place(corner, w, h);
+    batch.fill(atlas, x, y, w, h, BACKGROUND);
+    batch.fill(atlas, x, y, w, 1.0, band);
+    batch.fill(atlas, x, y + 1.0, w, 1.0, rgba(r, g, b, 90));
+    // The number at twice the size: drawn, then scaled about its top left.
+    let start = batch.vertices.len();
+    batch.text(atlas, &number, x + 5.0, y + 5.0, ink, true);
+    batch.scale_since(start, x + 5.0, y + 5.0, 2.0, 2.0);
+    batch.text(atlas, "FPS", x + 5.0 + number_w + 3.0, y + 12.0, rgba(200, 200, 208, 255), true);
+    if lows {
+        batch.text(atlas, &detail, x + 5.0, y + 22.0, rgba(170, 170, 178, 255), true);
+    }
+}
+
 fn scratch_corners() -> Corners {
     Corners::new(4096.0, 4096.0, 0.0)
 }

@@ -767,6 +767,15 @@ pub extern "system" fn Java_com_craftstudio_cslauncher_engine_horizon_HorizonNat
     jstring_result(&mut env, horizon_client::android_runtime::host_take_notice())
 }
 
+/// What the player is doing (`scene\tworld\tserver\tplayers`), for Discord Rich Presence and play time.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_craftstudio_cslauncher_engine_horizon_HorizonNative_nativeHostStatus<'l>(
+    mut env: JNIEnv<'l>,
+    _class: JClass<'l>,
+) -> jstring {
+    jstring_result(&mut env, Some(horizon_client::android_runtime::host_status()))
+}
+
 /// Bit 0: the game wants the pointer captured (world view); bit 1: it asked for a text keyboard.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_craftstudio_cslauncher_engine_horizon_HorizonNative_nativeHostPoll<'l>(

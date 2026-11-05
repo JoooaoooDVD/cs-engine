@@ -350,6 +350,20 @@ pub fn host_note_published(address: Option<&str>) {
 pub fn host_published() -> Option<String> {
     HOST_PUBLISHED.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
+/// What the player is doing, for the launcher's Discord Rich Presence and
+/// play time: `scene\tworld\tserver\tplayers`, scene one of `menu`,
+/// `singleplayer`, `hosting`, `multiplayer`.
+static HOST_STATUS: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+pub fn host_set_status(status: &str) {
+    let mut s = HOST_STATUS.lock().unwrap_or_else(|e| e.into_inner());
+    if *s != status {
+        s.clear();
+        s.push_str(status);
+    }
+}
+pub fn host_status() -> String {
+    HOST_STATUS.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
 /// CS Friends notices for the launcher's system notifications (`title\ntext`),
 /// oldest first; the launcher polls them one at a time.
 static HOST_NOTICES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());

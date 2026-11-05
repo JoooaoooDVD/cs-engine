@@ -134,7 +134,8 @@ impl Default for Extras {
             zoom_level: 4,
             zoom_smooth: true,
             zoom_sensitivity: true,
-            fps: false,
+            // CS Engine (the launcher's host mode) shows its FPS panel from the start.
+            fps: crate::android_runtime::host_mode(),
             fps_corner: Corner::TopLeft,
             fps_lows: false,
             keystrokes: false,

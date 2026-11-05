@@ -1,9 +1,17 @@
-//! The CS Friends screen (`game/cs_friends_ui.rs` drives it): three tabs —
-//! Friends (your code, add a friend, requests, who is online, Join / Invite),
-//! Chat (one-to-one messages) and Host (publish the world, server name and
-//! icon friends see, invite everyone). Drawn like the other Horizon screens:
-//! menu background, vanilla buttons, Done in the footer. Pure layout here:
-//! the game fills a `View`, keeps the `Ui` state and acts on the `Action`.
+//! The CS pages inside the game (`game/cs_friends_ui.rs` drives them): four
+//! pages that share one screen — **Friends** (your code, add a friend,
+//! requests, who is online, Join / Invite / Chat), **Chat** (one-to-one
+//! messages), **Host World** (publish the world, the server name and icon
+//! friends see, invite everyone) and **Voice Chat** (the built-in voice chat:
+//! groups with a name and password, invites, who to mute, the microphone).
+//! The Friends page opens the others; key V opens Voice Chat directly.
+//!
+//! Drawn like the other Horizon screens (menu background, vanilla buttons,
+//! Done in the footer) with CS cards on top, and animated: pages settle in,
+//! rows follow one another, toggles slide, the microphone orb breathes and
+//! swells with the voice, speakers' bars dance, a pressed button ripples.
+//! Pure layout here: the game fills a `View`, keeps the `Ui` state, ticks
+//! the `Anim` once a frame and acts on the `Action`.
 use crate::{
     cs_friends::{Friend, Invite, Message, Request},
     hud::{HudAtlas, HudBatch, rgba},
@@ -11,6 +19,7 @@ use crate::{
     text::Text,
     ui,
 };
+use std::time::Instant;
 
 pub const TITLE: &str = "CS Friends";
 const ROW: f32 = 22.0;
@@ -33,6 +42,22 @@ fn yellow() -> u32 {
 fn red() -> u32 {
     rgba(255, 110, 110, 255)
 }
+/// A card's face and edge.
+fn card() -> u32 {
+    rgba(0, 0, 0, 96)
+}
+fn card_edge() -> u32 {
+    rgba(255, 255, 255, 28)
+}
+fn accent() -> u32 {
+    rgba(198, 198, 206, 255)
+}
+
+/// How long a page takes to settle in, and each row's lag behind the last.
+const PAGE_IN: f32 = 0.26;
+const STAGGER: f32 = 0.035;
+/// A pressed button's ripple.
+const RIPPLE: f32 = 0.32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Tab {
@@ -42,6 +67,16 @@ pub enum Tab {
     Host,
     Voice,
 }
+impl Tab {
+    pub fn title(self) -> &'static str {
+        match self {
+            Tab::Friends => TITLE,
+            Tab::Chat => "Chat",
+            Tab::Host => "Host World",
+            Tab::Voice => "Voice Chat",
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Focus {
     #[default]
@@ -49,8 +84,89 @@ pub enum Focus {
     AddCode,
     Chat,
     Motd,
-    /// The voice menu's group name.
+    /// The voice page's group name.
     Group,
+    /// The voice page's group password.
+    Password,
+}
+
+/// Eased values the game ticks once a frame while the screen is open.
+#[derive(Debug, Default)]
+pub struct Anim {
+    last: Option<Instant>,
+    /// Seconds the screen has been open.
+    pub clock: f32,
+    /// Seconds since the page changed (the settle-in).
+    pub page: f32,
+    /// Voice chat on (0 off, 1 on), push to talk, talking: eased.
+    pub enabled: f32,
+    pub ptt: f32,
+    pub talking: f32,
+    /// The microphone level, eased.
+    pub level: f32,
+    /// A pressed button's box and the seconds since (the ripple).
+    pub pressed: Option<([f32; 4], f32)>,
+    /// The hovered button's box, eased towards it (the glow follows the cursor).
+    pub hover: Option<([f32; 4], f32)>,
+}
+impl Anim {
+    /// Once a frame: the clocks advance, the eased values chase their targets.
+    pub fn tick(&mut self, enabled: bool, ptt: bool, talking: bool, level: f32) {
+        let now = Instant::now();
+        let dt = self
+            .last
+            .map_or(0.0, |t| now.duration_since(t).as_secs_f32())
+            .clamp(0.0, 0.1);
+        self.last = Some(now);
+        self.clock += dt;
+        self.page += dt;
+        let chase = |v: &mut f32, target: f32, speed: f32| {
+            *v += (target - *v) * (1.0 - (-speed * dt).exp());
+        };
+        chase(&mut self.enabled, f32::from(u8::from(enabled)), 14.0);
+        chase(&mut self.ptt, f32::from(u8::from(ptt)), 14.0);
+        chase(&mut self.talking, f32::from(u8::from(talking)), 12.0);
+        chase(&mut self.level, level, if level > self.level { 30.0 } else { 8.0 });
+        if let Some((_, age)) = &mut self.pressed {
+            *age += dt;
+            if *age > RIPPLE {
+                self.pressed = None;
+            }
+        }
+        if let Some((_, glow)) = &mut self.hover {
+            chase(glow, 1.0, 16.0);
+        }
+    }
+    /// The page changed: it settles in again.
+    pub fn page_changed(&mut self) {
+        self.page = 0.0;
+        self.hover = None;
+    }
+    /// A button was pressed at `rect`: the ripple.
+    pub fn press(&mut self, rect: [f32; 4]) {
+        self.pressed = Some((rect, 0.0));
+    }
+}
+fn ease_out(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    1.0 - (1.0 - t).powi(3)
+}
+/// Where an element is in its settle-in, 0 (not yet) to 1 (in place).
+fn settle(anim: &Anim, delay: f32) -> f32 {
+    ease_out((anim.page - delay) / PAGE_IN)
+}
+fn with_alpha(color: u32, alpha: f32) -> u32 {
+    let a = ((color >> 24) as f32 * alpha.clamp(0.0, 1.0)).round() as u32;
+    (color & 0x00FF_FFFF) | (a << 24)
+}
+fn lerp_color(a: u32, b: u32, t: f32) -> u32 {
+    let t = t.clamp(0.0, 1.0);
+    let ch = |shift: u32| {
+        let x = ((a >> shift) & 0xFF) as f32;
+        let y = ((b >> shift) & 0xFF) as f32;
+        ((x + (y - x) * t).round() as u32) << shift
+    };
+    ch(0) | ch(8) | ch(16) | ch(24)
 }
 
 /// The screen's own state (what the player typed and where they are).
@@ -64,8 +180,14 @@ pub struct Ui {
     pub chat_with: Option<String>,
     pub chat_text: String,
     pub motd: String,
-    /// The voice menu: a group name typed to create or join.
+    /// The voice page: a group name typed to create one.
     pub group_name: String,
+    /// The voice page: the password typed (to create with, or to join with).
+    pub password: String,
+    /// The voice page: a locked group the player is joining (the password is asked).
+    pub join_target: Option<String>,
+    /// The voice page: the invite picker is open.
+    pub inviting: bool,
     pub focus: Focus,
     /// 0 = CS Launcher icon, 1 = the world's icon, 2 = a custom file.
     pub icon: usize,
@@ -73,6 +195,7 @@ pub struct Ui {
     pub max_players: usize,
     /// A friend's Remove was pressed once; the next press removes.
     pub confirm_remove: Option<String>,
+    pub anim: Anim,
 }
 impl Ui {
     pub fn field_mut(&mut self) -> Option<&mut String> {
@@ -82,6 +205,7 @@ impl Ui {
             Focus::Chat => Some(&mut self.chat_text),
             Focus::Motd => Some(&mut self.motd),
             Focus::Group => Some(&mut self.group_name),
+            Focus::Password => Some(&mut self.password),
         }
     }
     pub fn field(&self) -> Option<&String> {
@@ -91,6 +215,7 @@ impl Ui {
             Focus::Chat => Some(&self.chat_text),
             Focus::Motd => Some(&self.motd),
             Focus::Group => Some(&self.group_name),
+            Focus::Password => Some(&self.password),
         }
     }
     pub fn max_len(&self) -> usize {
@@ -99,12 +224,24 @@ impl Ui {
             Focus::Chat => 256,
             Focus::Motd => 59,
             Focus::Group => 24,
+            Focus::Password => 24,
             Focus::None => 0,
         }
     }
+    /// Go to `tab`: the list starts at the top, the page settles in.
+    pub fn go(&mut self, tab: Tab) {
+        if self.tab != tab {
+            self.anim.page_changed();
+        }
+        self.tab = tab;
+        self.scroll = 0;
+        self.focus = Focus::None;
+        self.join_target = None;
+        self.inviting = false;
+    }
 }
 
-/// What the host tab shows.
+/// What the host page shows.
 #[derive(Clone, Debug, Default)]
 pub struct HostView {
     /// A world is open (not the title screen).
@@ -119,7 +256,19 @@ pub struct HostView {
     pub world: String,
 }
 
-/// The Voice tab (CS built-in voice chat, game/cs_voice.rs).
+/// A group on the voice page.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GroupRow {
+    pub name: String,
+    /// Joining needs the password (or an invite).
+    pub locked: bool,
+    /// Members: name ("You" first), speaking now, muted.
+    pub members: Vec<(String, bool, bool)>,
+    /// The player's own group.
+    pub mine: bool,
+}
+
+/// The voice page (CS built-in voice chat, game/cs_voice.rs).
 #[derive(Clone, Debug, Default)]
 pub struct VoiceView {
     pub enabled: bool,
@@ -134,12 +283,18 @@ pub struct VoiceView {
     pub talking: bool,
     /// Microphone level 0 to 1.
     pub level: f32,
-    /// Players in the world: name, muted, heard right now.
+    /// Players in the world (not in the player's group): name, muted, heard right now.
     pub players: Vec<(String, bool, bool)>,
     /// The group the player is in.
     pub group: Option<String>,
-    /// The world's groups: name, members' names, the player's own.
-    pub groups: Vec<(String, Vec<String>, bool)>,
+    /// The world's groups.
+    pub groups: Vec<GroupRow>,
+    /// Invites received: from whom, to which group.
+    pub invites: Vec<(String, String)>,
+    /// Players who can be invited to the player's group.
+    pub invitable: Vec<String>,
+    /// The server's last word on a request: text, a problem.
+    pub notice: Option<(String, bool)>,
 }
 
 /// What the screen shows (the game fills it from `cs_friends::State`).
@@ -175,6 +330,14 @@ impl View {
     }
 }
 
+/// A voice slider: which setting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Knob {
+    Volume,
+    Mic,
+    Range,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
     Tab(Tab),
@@ -200,19 +363,35 @@ pub enum Action {
     CycleIcon,
     /// Player limit up (+1) or down (-1) a step.
     Players(i32),
-    /// Voice chat on/off, push-to-talk/open mic, volume, mic gain, range steps, mute a player.
+    /// Voice chat on/off, push-to-talk/open mic, a slider set (0 to 1), mute a player.
     VoiceEnabled,
     VoiceMode,
-    VoiceVolume(i32),
-    VoiceMic(i32),
-    VoiceRange(i32),
+    VoiceSet(Knob, f32),
     VoiceMute(String),
-    /// Create or join the group typed (empty: the named one), leave the group.
+    /// Create the group typed (with the password typed, if any).
+    VoiceGroupCreate,
+    /// Join the named group (with the password typed when it is locked).
     VoiceGroupJoin(String),
+    /// A locked group: ask for its password first.
+    VoiceAskPassword(String),
+    VoiceCancelPassword,
     VoiceGroupLeave,
+    /// Open / close the invite picker; invite the named player.
+    VoiceInviteToggle,
+    VoiceInvite(String),
+    /// An invite received, by index: accept it or let it go.
+    VoiceInviteAccept(usize),
+    VoiceInviteDismiss(usize),
     Done,
 }
 
+struct Line {
+    text: String,
+    color: u32,
+    x: f32,
+    y: f32,
+    delay: f32,
+}
 struct Button {
     x: f32,
     y: f32,
@@ -220,6 +399,7 @@ struct Button {
     label: String,
     action: Action,
     active: bool,
+    delay: f32,
 }
 struct Field {
     x: f32,
@@ -229,13 +409,146 @@ struct Field {
     value: String,
     placeholder: &'static str,
     focused: bool,
+    secret: bool,
+    delay: f32,
+}
+struct Slider {
+    x: f32,
+    y: f32,
+    w: f32,
+    label: String,
+    value: f32,
+    knob: Knob,
+    active: bool,
+    delay: f32,
+}
+/// A card behind a section.
+struct Panel {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    delay: f32,
+}
+/// A drawn (not typed) decoration.
+enum Mark {
+    /// Three dancing bars: a speaker (`active`), or quiet.
+    Speaking { x: f32, y: f32, active: bool, color: u32 },
+    /// A status dot.
+    Dot { x: f32, y: f32, color: u32 },
+    /// A padlock.
+    Lock { x: f32, y: f32, color: u32 },
+    /// The voice on/off switch (it follows `Anim::enabled`).
+    Toggle { x: f32, y: f32 },
+    /// The microphone orb.
+    Orb { x: f32, y: f32 },
+}
+struct Placed {
+    mark: Mark,
+    delay: f32,
 }
 struct Layout {
-    lines: Vec<(String, u32, f32, f32)>,
+    lines: Vec<Line>,
     buttons: Vec<Button>,
     fields: Vec<Field>,
+    sliders: Vec<Slider>,
+    panels: Vec<Panel>,
+    marks: Vec<Placed>,
     /// Rows the list has and rows that fit (for the scroll arrows).
     overflow: Option<(i32, i32)>,
+    /// The voice switch's hit box (a tap on it toggles voice chat).
+    toggle: Option<[f32; 4]>,
+    /// The settle-in lag stamped on what is added next.
+    delay: f32,
+}
+impl Layout {
+    fn new() -> Self {
+        Self {
+            lines: Vec::new(),
+            buttons: Vec::new(),
+            fields: Vec::new(),
+            sliders: Vec::new(),
+            panels: Vec::new(),
+            marks: Vec::new(),
+            overflow: None,
+            toggle: None,
+            delay: 0.0,
+        }
+    }
+    /// The next elements lag one step more.
+    fn step(&mut self) {
+        self.delay += STAGGER;
+    }
+    fn text(&mut self, text: impl Into<String>, color: u32, x: f32, y: f32) {
+        self.lines.push(Line {
+            text: text.into(),
+            color,
+            x,
+            y,
+            delay: self.delay,
+        });
+    }
+    /// A paragraph wrapped to `width`, from `y` down; returns the y after it.
+    fn para(&mut self, atlas: &HudAtlas, text: &str, color: u32, x: f32, mut y: f32, width: f32) -> f32 {
+        for line in wrap(text, width, atlas) {
+            self.text(line, color, x, y);
+            y += 10.0;
+        }
+        y
+    }
+    fn button(&mut self, x: f32, y: f32, w: f32, label: impl Into<String>, action: Action, active: bool) {
+        self.buttons.push(Button {
+            x,
+            y,
+            w,
+            label: label.into(),
+            action,
+            active,
+            delay: self.delay,
+        });
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn field(&mut self, x: f32, y: f32, w: f32, focus: Focus, value: &str, placeholder: &'static str, focused: bool, secret: bool) {
+        self.fields.push(Field {
+            x,
+            y,
+            w,
+            focus,
+            value: value.to_owned(),
+            placeholder,
+            focused,
+            secret,
+            delay: self.delay,
+        });
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn slider(&mut self, x: f32, y: f32, w: f32, label: String, value: f32, knob: Knob, active: bool) {
+        self.sliders.push(Slider {
+            x,
+            y,
+            w,
+            label,
+            value,
+            knob,
+            active,
+            delay: self.delay,
+        });
+    }
+    fn panel(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        self.panels.push(Panel {
+            x,
+            y,
+            w,
+            h,
+            delay: self.delay,
+        });
+    }
+    fn mark(&mut self, mark: Mark) {
+        self.marks.push(Placed {
+            mark,
+            delay: self.delay,
+        });
+    }
 }
 
 /// `text` cut to `width` with an ellipsis.
@@ -263,640 +576,771 @@ fn status_text(f: &Friend) -> (&'static str, u32) {
     }
 }
 
+/// The page's frame: where the content goes.
+#[derive(Clone, Copy)]
+struct Frame {
+    left: f32,
+    right: f32,
+    width: f32,
+    top: f32,
+    bottom: f32,
+}
+
 fn layout(atlas: &HudAtlas, (w, h): (f32, f32), ui: &Ui, view: &View) -> Layout {
     let cx = (w / 2.0).floor();
-    let width = (w - 20.0).min(300.0);
+    let width = (w - 20.0).min(320.0);
     let left = cx - (width / 2.0).floor();
     let right = left + width;
-    let mut lines = Vec::new();
-    let mut buttons = Vec::new();
-    let mut fields = Vec::new();
-    let mut overflow = None;
-    // Header: who we are.
-    let sub = if !view.connected {
-        "Connecting to CS Friends…".to_owned()
-    } else if view.me_code.is_empty() {
-        "Signing in…".to_owned()
-    } else {
-        format!("{} · your code: {}", view.me_name, view.me_code)
-    };
-    lines.push((fit(atlas, &sub, width - 70.0), grey(), left, 21.0));
-    buttons.push(Button {
-        x: right - 60.0,
-        y: 16.0,
-        w: 60.0,
-        label: if view.copied { "Copied" } else { "Copy Code" }.to_owned(),
-        action: Action::CopyCode,
-        active: !view.me_code.is_empty(),
-    });
-    // Tabs.
-    let tabs = [
-        (
-            Tab::Friends,
-            {
-                let n = view.requests.iter().filter(|r| r.incoming).count() + view.invites.len();
-                if n > 0 {
-                    format!("Friends ({n})")
-                } else {
-                    "Friends".to_owned()
-                }
-            },
-        ),
-        (
-            Tab::Chat,
-            {
-                let n: usize = view.unread.iter().map(|(_, n)| n).sum();
-                if n > 0 {
-                    format!("Chat ({n})")
-                } else {
-                    "Chat".to_owned()
-                }
-            },
-        ),
-        (Tab::Host, "Host".to_owned()),
-        (
-            Tab::Voice,
-            if view.voice.talking || view.voice.players.iter().any(|p| p.2) {
-                "Voice ●".to_owned()
-            } else {
-                "Voice".to_owned()
-            },
-        ),
-    ];
-    let tab_w = ((width - 12.0) / 4.0).floor();
-    for (i, (tab, label)) in tabs.into_iter().enumerate() {
-        buttons.push(Button {
-            x: left + i as f32 * (tab_w + 4.0),
-            y: 34.0,
-            w: tab_w,
-            label,
-            action: Action::Tab(tab),
-            active: ui.tab != tab,
-        });
-    }
-    let top = 60.0;
-    let bottom = h - 44.0;
+    let mut l = Layout::new();
     let status_y = h - 40.0;
-    match ui.tab {
+    let bottom = h - 44.0;
+    let top = match ui.tab {
         Tab::Friends => {
-            fields.push(Field {
-                x: left,
-                y: top,
-                w: width - 64.0,
-                focus: Focus::AddCode,
-                value: ui.add_code.clone(),
-                placeholder: "Friend code (CS-XXXXXX)",
-                focused: ui.focus == Focus::AddCode,
-            });
-            buttons.push(Button {
-                x: right - 60.0,
-                y: top,
-                w: 60.0,
-                label: "Add".to_owned(),
-                action: Action::AddFriend,
-                active: ui.add_code.trim().len() >= 4 && view.connected,
-            });
-            // The rows: invites, requests, friends.
-            enum Row<'a> {
-                Invite(&'a Invite),
-                Request(&'a Request),
-                Friend(&'a Friend),
-            }
-            let mut rows: Vec<Row> = Vec::new();
-            rows.extend(view.invites.iter().map(Row::Invite));
-            rows.extend(view.requests.iter().filter(|r| r.incoming).map(Row::Request));
-            rows.extend(view.friends.iter().map(Row::Friend));
-            rows.extend(view.requests.iter().filter(|r| !r.incoming).map(Row::Request));
-            let list_top = top + 26.0;
-            let fit_rows = ((bottom - list_top) / ROW).floor().max(1.0) as i32;
-            let total = rows.len() as i32;
-            let scroll = ui.scroll.clamp(0, (total - fit_rows).max(0));
-            if total > fit_rows {
-                overflow = Some((total, fit_rows));
-            }
-            if rows.is_empty() {
-                let text = if view.connected {
-                    "No friends yet. Share your code with a friend, or type theirs above — they get a request to accept."
-                } else {
-                    "Friends appear here once the connection is up."
-                };
-                let mut y = list_top + 4.0;
-                for line in wrap(text, width, atlas) {
-                    lines.push((line, grey(), left, y));
-                    y += 10.0;
-                }
-            }
-            let name_w = width - 150.0;
-            for (i, row) in rows.iter().enumerate().skip(scroll as usize).take(fit_rows as usize) {
-                let y = list_top + (i as i32 - scroll) as f32 * ROW;
-                let ty = y + 6.0;
-                match row {
-                    Row::Invite(inv) => {
-                        lines.push((
-                            fit(atlas, &format!("{} invited you to {}", inv.from, inv.world), width - 112.0),
-                            yellow(),
-                            left,
-                            ty,
-                        ));
-                        buttons.push(Button {
-                            x: right - 108.0,
-                            y,
-                            w: 60.0,
-                            label: "Join".to_owned(),
-                            action: Action::InviteJoin(inv.id, inv.address.clone()),
-                            active: true,
-                        });
-                        buttons.push(Button {
-                            x: right - 44.0,
-                            y,
-                            w: 44.0,
-                            label: "Later".to_owned(),
-                            action: Action::InviteDismiss(inv.id),
-                            active: true,
-                        });
-                    }
-                    Row::Request(r) if r.incoming => {
-                        lines.push((
-                            fit(atlas, &format!("{} ({}) wants to be friends", r.name, r.code), width - 124.0),
-                            yellow(),
-                            left,
-                            ty,
-                        ));
-                        buttons.push(Button {
-                            x: right - 120.0,
-                            y,
-                            w: 60.0,
-                            label: "Accept".to_owned(),
-                            action: Action::Accept(r.id.clone()),
-                            active: true,
-                        });
-                        buttons.push(Button {
-                            x: right - 56.0,
-                            y,
-                            w: 56.0,
-                            label: "Decline".to_owned(),
-                            action: Action::Decline(r.id.clone()),
-                            active: true,
-                        });
-                    }
-                    Row::Request(r) => {
-                        lines.push((
-                            fit(atlas, &format!("{} · request sent", r.name), width - 64.0),
-                            grey(),
-                            left,
-                            ty,
-                        ));
-                        buttons.push(Button {
-                            x: right - 56.0,
-                            y,
-                            w: 56.0,
-                            label: "Cancel".to_owned(),
-                            action: Action::Remove(r.id.clone()),
-                            active: true,
-                        });
-                    }
-                    Row::Friend(f) => {
-                        let (status, color) = status_text(f);
-                        lines.push(("●".to_owned(), color, left, ty));
-                        lines.push((fit(atlas, &f.name, name_w - 10.0), WHITE, left + 10.0, ty));
-                        let detail = match (&f.status[..], &f.world) {
-                            ("hosting", Some(world)) => format!("{status} · {world}"),
-                            _ => status.to_owned(),
-                        };
-                        lines.push((fit(atlas, &detail, 70.0), color, left + name_w, ty));
-                        let removing = ui.confirm_remove.as_deref() == Some(f.id.as_str());
-                        if removing {
-                            buttons.push(Button {
-                                x: right - 120.0,
-                                y,
-                                w: 96.0,
-                                label: "Remove friend?".to_owned(),
-                                action: Action::Remove(f.id.clone()),
-                                active: true,
-                            });
-                        } else if f.hosting() {
-                            buttons.push(Button {
-                                x: right - 120.0,
-                                y,
-                                w: 50.0,
-                                label: "Join".to_owned(),
-                                action: Action::Join(f.address.clone().unwrap_or_default()),
-                                active: true,
-                            });
-                        } else {
-                            buttons.push(Button {
-                                x: right - 120.0,
-                                y,
-                                w: 50.0,
-                                label: "Invite".to_owned(),
-                                action: Action::Invite(f.id.clone()),
-                                active: f.online() && view.host.address.is_some(),
-                            });
-                        }
-                        if !removing {
-                            let unread = view.unread_of(&f.id);
-                            buttons.push(Button {
-                                x: right - 66.0,
-                                y,
-                                w: 42.0,
-                                label: if unread > 0 { format!("Chat {unread}") } else { "Chat".to_owned() },
-                                action: Action::OpenChat(f.id.clone()),
-                                active: true,
-                            });
-                        }
-                        buttons.push(Button {
-                            x: right - 20.0,
-                            y,
-                            w: 20.0,
-                            label: if removing { "✓" } else { "✕" }.to_owned(),
-                            action: Action::Remove(f.id.clone()),
-                            active: true,
-                        });
-                    }
-                }
-            }
-        }
-        Tab::Chat => match &ui.chat_with {
-            None => {
-                let list_top = top;
-                let fit_rows = ((bottom - list_top) / ROW).floor().max(1.0) as i32;
-                let total = view.friends.len() as i32;
-                let scroll = ui.scroll.clamp(0, (total - fit_rows).max(0));
-                if total > fit_rows {
-                    overflow = Some((total, fit_rows));
-                }
-                if view.friends.is_empty() {
-                    lines.push(("Add a friend first — then chat here.".to_owned(), grey(), left, top + 4.0));
-                }
-                for (i, f) in view.friends.iter().enumerate().skip(scroll as usize).take(fit_rows as usize) {
-                    let y = list_top + (i as i32 - scroll) as f32 * ROW;
-                    let (_, color) = status_text(f);
-                    lines.push(("●".to_owned(), color, left, y + 6.0));
-                    lines.push((fit(atlas, &f.name, width - 140.0), WHITE, left + 10.0, y + 6.0));
-                    let unread = view.unread_of(&f.id);
+            // Header: who we are, and the other pages.
+            let sub = if !view.connected {
+                "Connecting to CS Friends…".to_owned()
+            } else if view.me_code.is_empty() {
+                "Signing in…".to_owned()
+            } else {
+                format!("{} · your code: {}", view.me_name, view.me_code)
+            };
+            l.text(fit(atlas, &sub, width - 70.0), grey(), left, 21.0);
+            l.button(
+                right - 60.0,
+                16.0,
+                60.0,
+                if view.copied { "Copied" } else { "Copy Code" },
+                Action::CopyCode,
+                !view.me_code.is_empty(),
+            );
+            l.step();
+            let unread: usize = view.unread.iter().map(|(_, n)| n).sum();
+            let pages = [
+                (
+                    Tab::Chat,
                     if unread > 0 {
-                        lines.push((format!("{unread} new"), yellow(), right - 110.0, y + 6.0));
-                    }
-                    buttons.push(Button {
-                        x: right - 60.0,
-                        y,
-                        w: 60.0,
-                        label: "Open".to_owned(),
-                        action: Action::OpenChat(f.id.clone()),
-                        active: true,
-                    });
-                }
-            }
-            Some(id) => {
-                let name = view.name_of(id);
-                let online = view.friends.iter().find(|f| &f.id == id).is_some_and(Friend::online);
-                lines.push((
-                    fit(atlas, &format!("Chat with {name}{}", if online { "" } else { " (offline)" }), width - 64.0),
-                    WHITE,
-                    left,
-                    top + 2.0,
-                ));
-                buttons.push(Button {
-                    x: right - 56.0,
-                    y: top - 4.0,
-                    w: 56.0,
-                    label: "Back".to_owned(),
-                    action: Action::ChatBack,
-                    active: true,
-                });
-                // Messages, newest at the bottom, as many as fit above the input.
-                let input_y = bottom - 20.0;
-                let area_top = top + 16.0;
-                let mut rendered: Vec<(String, u32)> = Vec::new();
-                for m in &view.chat {
-                    let prefix = if m.mine { "You: " } else { "" };
-                    let color = if m.mine { grey() } else { WHITE };
-                    for line in wrap(&format!("{prefix}{}", m.body), width, atlas) {
-                        rendered.push((line, color));
-                    }
-                }
-                if rendered.is_empty() {
-                    rendered.push((format!("Say hi to {name}."), dim()));
-                }
-                let fit_lines = ((input_y - 4.0 - area_top) / 10.0).floor().max(1.0) as usize;
-                let start = rendered.len().saturating_sub(fit_lines);
-                for (i, (line, color)) in rendered.into_iter().skip(start).enumerate() {
-                    lines.push((line, color, left, area_top + i as f32 * 10.0));
-                }
-                fields.push(Field {
-                    x: left,
-                    y: input_y,
-                    w: width - 64.0,
-                    focus: Focus::Chat,
-                    value: ui.chat_text.clone(),
-                    placeholder: "Message…",
-                    focused: ui.focus == Focus::Chat,
-                });
-                buttons.push(Button {
-                    x: right - 60.0,
-                    y: input_y,
-                    w: 60.0,
-                    label: "Send".to_owned(),
-                    action: Action::Send,
-                    active: !ui.chat_text.trim().is_empty(),
-                });
-            }
-        },
-        Tab::Host => {
-            let hv = &view.host;
-            let mut y = top;
-            let add = |lines: &mut Vec<(String, u32, f32, f32)>, text: &str, color: u32, y: &mut f32| {
-                for line in wrap(text, width, atlas) {
-                    lines.push((line, color, left, *y));
-                    *y += 10.0;
-                }
-            };
-            if !hv.in_world {
-                add(&mut lines, "Open a world to host it: friends join through its public address (e4mc, no VPN, no port forwarding).", grey(), &mut y);
-            } else if hv.publishing {
-                match &hv.address {
-                    Some(a) => add(&mut lines, &format!("Your world is public: {a}"), WHITE, &mut y),
-                    None => add(&mut lines, "Reaching the relay…", WHITE, &mut y),
-                }
-                if hv.guests > 0 {
-                    add(&mut lines, &format!("{} guest(s) connected.", hv.guests), grey(), &mut y);
-                }
-                if let Some(p) = &hv.problem {
-                    add(&mut lines, p, red(), &mut y);
-                }
-                y += 2.0;
-                let bw = ((width - 8.0) / 3.0).floor();
-                buttons.push(Button {
-                    x: left,
-                    y,
-                    w: bw,
-                    label: if hv.copied { "Copied" } else { "Copy Address" }.to_owned(),
-                    action: Action::CopyAddress,
-                    active: hv.address.is_some(),
-                });
-                buttons.push(Button {
-                    x: left + bw + 4.0,
-                    y,
-                    w: bw,
-                    label: "Invite All".to_owned(),
-                    action: Action::InviteAll,
-                    active: hv.address.is_some(),
-                });
-                buttons.push(Button {
-                    x: left + 2.0 * (bw + 4.0),
-                    y,
-                    w: bw,
-                    label: "Stop".to_owned(),
-                    action: Action::StopPublish,
-                    active: true,
-                });
-                y += 24.0;
-            } else {
-                add(&mut lines, "Publish your world: it opens to LAN and gets a public address friends join from the Friends tab (Join) or an invite.", WHITE, &mut y);
-                y += 2.0;
-                buttons.push(Button {
-                    x: left,
-                    y,
-                    w: width,
-                    label: "Publish World".to_owned(),
-                    action: Action::Publish,
-                    active: hv.can_publish,
-                });
-                y += 24.0;
-            }
-            if hv.in_world {
-                y += 2.0;
-                lines.push(("Server name friends see (MOTD)".to_owned(), grey(), left, y));
-                y += 11.0;
-                fields.push(Field {
-                    x: left,
-                    y,
-                    w: width - 64.0,
-                    focus: Focus::Motd,
-                    value: ui.motd.clone(),
-                    placeholder: "{world} - hosted by {name} / CS Launcher Plus",
-                    focused: ui.focus == Focus::Motd,
-                });
-                buttons.push(Button {
-                    x: right - 60.0,
-                    y,
-                    w: 60.0,
-                    label: "Save".to_owned(),
-                    action: Action::SaveMotd,
-                    active: true,
-                });
-                y += 24.0;
-                let icon = ["CS Launcher icon", "This world's icon", "Custom file"][ui.icon.min(2)];
-                lines.push((format!("Server icon: {icon}"), grey(), left, y + 6.0));
-                buttons.push(Button {
-                    x: right - 60.0,
-                    y,
-                    w: 60.0,
-                    label: "Change".to_owned(),
-                    action: Action::CycleIcon,
-                    active: true,
-                });
-                y += 22.0;
-                if ui.icon == 2 && y + 44.0 < bottom {
-                    add(&mut lines, "Custom: a 64x64 cs-server-icon-custom.png in this profile's game folder.", dim(), &mut y);
-                    y += 2.0;
-                }
-                lines.push((
-                    format!("Players (you included): {}", ui.max_players.max(2)),
-                    grey(),
-                    left,
-                    y + 6.0,
-                ));
-                buttons.push(Button {
-                    x: right - 60.0,
-                    y,
-                    w: 28.0,
-                    label: "-".to_owned(),
-                    action: Action::Players(-1),
-                    active: ui.max_players > 2,
-                });
-                buttons.push(Button {
-                    x: right - 28.0,
-                    y,
-                    w: 28.0,
-                    label: "+".to_owned(),
-                    action: Action::Players(1),
-                    active: ui.max_players < 32,
-                });
-                let _ = y;
-            }
-        }
-        Tab::Voice => {
-            let vv = &view.voice;
-            let mut y = top;
-            let add = |lines: &mut Vec<(String, u32, f32, f32)>, text: &str, color: u32, y: &mut f32| {
-                for line in wrap(text, width, atlas) {
-                    lines.push((line, color, left, *y));
-                    *y += 10.0;
-                }
-            };
-            buttons.push(Button {
-                x: left,
-                y,
-                w: width,
-                label: if vv.enabled { "Voice Chat: ON" } else { "Voice Chat: OFF" }.to_owned(),
-                action: Action::VoiceEnabled,
-                active: true,
-            });
-            y += 24.0;
-            if !vv.enabled {
-                add(&mut lines, "Built-in proximity voice chat for CS Engine worlds: talk to the players near you in a world you host or join (e4mc, LAN, a CS server). No account, no extra app.", grey(), &mut y);
-            } else {
-                // Status.
-                if !vv.in_world {
-                    add(&mut lines, "Join or host a world to talk. Voice works in CS Engine worlds and servers.", grey(), &mut y);
-                } else if !vv.available {
-                    add(&mut lines, "This server doesn't carry CS voice (not a CS Engine / Horizon host).", red(), &mut y);
-                } else if let Some(p) = &vv.mic_problem {
-                    add(&mut lines, &format!("Microphone: {p}. Allow the microphone permission, then come back."), red(), &mut y);
-                } else if vv.talking {
-                    let bars = (vv.level * 10.0).round() as usize;
-                    add(&mut lines, &format!("Transmitting  {}{}", "|".repeat(bars.min(10)), "·".repeat(10 - bars.min(10))), green(), &mut y);
-                } else if vv.ptt {
-                    add(&mut lines, "Ready. Hold the Push to Talk key (B, or the CS control button bound to it in Key Binds). V opens this menu.", WHITE, &mut y);
-                } else {
-                    add(&mut lines, "Ready. Open mic: sends when you speak.", WHITE, &mut y);
-                }
-                y += 2.0;
-                // Settings rows.
-                let row = |lines: &mut Vec<(String, u32, f32, f32)>, buttons: &mut Vec<Button>, y: f32, text: String, minus: Action, plus: Action, lo: bool, hi: bool| {
-                    lines.push((text, grey(), left, y + 6.0));
-                    buttons.push(Button { x: right - 60.0, y, w: 28.0, label: "-".to_owned(), action: minus, active: lo });
-                    buttons.push(Button { x: right - 28.0, y, w: 28.0, label: "+".to_owned(), action: plus, active: hi });
-                };
-                lines.push((format!("Mode: {}", if vv.ptt { "Push to talk" } else { "Open mic" }), grey(), left, y + 6.0));
-                buttons.push(Button { x: right - 60.0, y, w: 60.0, label: "Change".to_owned(), action: Action::VoiceMode, active: true });
-                y += 22.0;
-                row(&mut lines, &mut buttons, y, format!("Voice volume: {}%", vv.volume), Action::VoiceVolume(-1), Action::VoiceVolume(1), vv.volume > 0, vv.volume < 200);
-                y += 22.0;
-                row(&mut lines, &mut buttons, y, format!("Microphone gain: {}%", vv.mic), Action::VoiceMic(-1), Action::VoiceMic(1), vv.mic > 50, vv.mic < 300);
-                y += 22.0;
-                row(&mut lines, &mut buttons, y, format!("Range (your worlds): {} blocks", vv.range), Action::VoiceRange(-1), Action::VoiceRange(1), vv.range > 8, vv.range < 256);
-                y += 24.0;
-                // Groups: members hear each other from anywhere.
-                if vv.in_world && vv.available {
-                    match &vv.group {
-                        Some(g) => {
-                            lines.push((fit(atlas, &format!("Your group: {g}"), width - 64.0), green(), left, y + 6.0));
-                            buttons.push(Button { x: right - 60.0, y, w: 60.0, label: "Leave".to_owned(), action: Action::VoiceGroupLeave, active: true });
-                            y += 22.0;
-                            add(&mut lines, "Group members hear each other anywhere in the world, at full volume. Players near you still hear you too.", grey(), &mut y);
-                        }
-                        None => {
-                            lines.push(("Create or join a group (members hear each other anywhere)".to_owned(), grey(), left, y));
-                            y += 11.0;
-                            fields.push(Field {
-                                x: left,
-                                y,
-                                w: width - 64.0,
-                                focus: Focus::Group,
-                                value: ui.group_name.clone(),
-                                placeholder: "Group name",
-                                focused: ui.focus == Focus::Group,
-                            });
-                            buttons.push(Button {
-                                x: right - 60.0,
-                                y,
-                                w: 60.0,
-                                label: "Join".to_owned(),
-                                action: Action::VoiceGroupJoin(String::new()),
-                                active: !ui.group_name.trim().is_empty(),
-                            });
-                            y += 24.0;
-                        }
-                    }
-                    y += 2.0;
-                }
-                // Groups and players, one scrolled list: groups first (join
-                // another from here), then everyone in the world (mute).
-                let list_top = y;
-                let fit_rows = ((bottom - list_top) / ROW).floor().max(1.0) as i32;
-                let mut rows: Vec<(String, u32, String, Action, bool)> = Vec::new();
-                for (name, members, mine) in &vv.groups {
-                    let who = if members.is_empty() { String::new() } else { format!("  ({})", members.join(", ")) };
-                    rows.push((
-                        format!("[Group] {name}{who}"),
-                        if *mine { green() } else { WHITE },
-                        if *mine { "Leave" } else { "Join" }.to_owned(),
-                        if *mine { Action::VoiceGroupLeave } else { Action::VoiceGroupJoin(name.clone()) },
-                        false,
-                    ));
-                }
-                for (name, muted, heard) in &vv.players {
-                    rows.push((
-                        name.clone(),
-                        if *heard { green() } else if *muted { red() } else { WHITE },
-                        if *muted { "Unmute" } else { "Mute" }.to_owned(),
-                        Action::VoiceMute(name.clone()),
-                        true,
-                    ));
-                }
-                let total = rows.len() as i32;
-                let scroll = ui.scroll.clamp(0, (total - fit_rows).max(0));
-                if total > fit_rows {
-                    overflow = Some((total, fit_rows));
-                }
-                if rows.is_empty() && vv.in_world {
-                    lines.push(("Nobody else in the world yet.".to_owned(), dim(), left, y + 4.0));
-                }
-                for (i, (text, color, label, action, dot)) in rows.into_iter().enumerate().skip(scroll as usize).take(fit_rows as usize) {
-                    let y = list_top + (i as i32 - scroll) as f32 * ROW;
-                    let x = if dot {
-                        lines.push(("●".to_owned(), if color == WHITE { dim() } else { color }, left, y + 6.0));
-                        left + 10.0
+                        format!("Chat ({unread})")
                     } else {
-                        left
-                    };
-                    lines.push((fit(atlas, &text, width - 90.0), color, x, y + 6.0));
-                    buttons.push(Button { x: right - 60.0, y, w: 60.0, label, action, active: true });
-                }
+                        "Chat".to_owned()
+                    },
+                ),
+                (Tab::Host, "Host World".to_owned()),
+                (
+                    Tab::Voice,
+                    if view.voice.talking || view.voice.players.iter().any(|p| p.2) {
+                        "Voice Chat ●".to_owned()
+                    } else {
+                        "Voice Chat".to_owned()
+                    },
+                ),
+            ];
+            let bw = ((width - 8.0) / 3.0).floor();
+            for (i, (tab, label)) in pages.into_iter().enumerate() {
+                l.button(left + i as f32 * (bw + 4.0), 34.0, bw, label, Action::Tab(tab), true);
             }
+            l.step();
+            60.0
         }
+        _ => {
+            // A page of its own: back to Friends on the left.
+            l.button(10.0, 8.0, 60.0, "‹ Friends", Action::Tab(Tab::Friends), true);
+            l.step();
+            34.0
+        }
+    };
+    let frame = Frame {
+        left,
+        right,
+        width,
+        top,
+        bottom,
+    };
+    match ui.tab {
+        Tab::Friends => friends_page(atlas, &mut l, &frame, ui, view),
+        Tab::Chat => chat_page(atlas, &mut l, &frame, ui, view),
+        Tab::Host => host_page(atlas, &mut l, &frame, ui, view),
+        Tab::Voice => voice_page(atlas, &mut l, &frame, ui, view),
     }
     // Scroll arrows for long lists.
-    if let Some((total, fit_rows)) = overflow {
+    if let Some((total, fit_rows)) = l.overflow {
         let scroll = ui.scroll.clamp(0, (total - fit_rows).max(0));
-        buttons.push(Button {
-            x: right + 2.0,
-            y: top + if ui.tab == Tab::Friends { 26.0 } else { 0.0 },
-            w: 16.0,
-            label: "▲".to_owned(),
-            action: Action::Scroll(-1),
-            active: scroll > 0,
-        });
-        buttons.push(Button {
-            x: right + 2.0,
-            y: bottom - 20.0,
-            w: 16.0,
-            label: "▼".to_owned(),
-            action: Action::Scroll(1),
-            active: scroll < total - fit_rows,
-        });
+        let list_top = top + if ui.tab == Tab::Friends { 26.0 } else { 0.0 };
+        l.button(right + 2.0, list_top, 16.0, "▲", Action::Scroll(-1), scroll > 0);
+        l.button(right + 2.0, bottom - 20.0, 16.0, "▼", Action::Scroll(1), scroll < total - fit_rows);
     }
     // The status line: a problem, or a confirmation.
+    l.delay = 0.0;
     if let Some(e) = &view.error {
-        lines.push((fit(atlas, e, w - 20.0), red(), 10.0, status_y));
+        l.text(fit(atlas, e, w - 20.0), red(), 10.0, status_y);
     } else if let Some(i) = &view.info {
-        lines.push((fit(atlas, i, w - 20.0), green(), 10.0, status_y));
+        l.text(fit(atlas, i, w - 20.0), green(), 10.0, status_y);
     }
-    buttons.push(Button {
-        x: cx - 100.0,
-        y: h - 27.0,
-        w: 200.0,
-        label: "gui.done".to_owned(),
-        action: Action::Done,
-        active: true,
-    });
-    Layout {
-        lines,
-        buttons,
-        fields,
-        overflow,
+    l.button(cx - 100.0, h - 27.0, 200.0, "gui.done", Action::Done, true);
+    l
+}
+
+fn friends_page(atlas: &HudAtlas, l: &mut Layout, f: &Frame, ui: &Ui, view: &View) {
+    let Frame {
+        left,
+        right,
+        width,
+        top,
+        bottom,
+    } = *f;
+    l.field(
+        left,
+        top,
+        width - 64.0,
+        Focus::AddCode,
+        &ui.add_code,
+        "Friend code (CS-XXXXXX)",
+        ui.focus == Focus::AddCode,
+        false,
+    );
+    l.button(
+        right - 60.0,
+        top,
+        60.0,
+        "Add",
+        Action::AddFriend,
+        ui.add_code.trim().len() >= 4 && view.connected,
+    );
+    l.step();
+    // The rows: invites, requests, friends.
+    enum Row<'a> {
+        Invite(&'a Invite),
+        Request(&'a Request),
+        Friend(&'a Friend),
+    }
+    let mut rows: Vec<Row> = Vec::new();
+    rows.extend(view.invites.iter().map(Row::Invite));
+    rows.extend(view.requests.iter().filter(|r| r.incoming).map(Row::Request));
+    rows.extend(view.friends.iter().map(Row::Friend));
+    rows.extend(view.requests.iter().filter(|r| !r.incoming).map(Row::Request));
+    let list_top = top + 26.0;
+    let fit_rows = ((bottom - list_top) / ROW).floor().max(1.0) as i32;
+    let total = rows.len() as i32;
+    let scroll = ui.scroll.clamp(0, (total - fit_rows).max(0));
+    if total > fit_rows {
+        l.overflow = Some((total, fit_rows));
+    }
+    if rows.is_empty() {
+        let text = if view.connected {
+            "No friends yet. Share your code with a friend, or type theirs above — they get a request to accept."
+        } else {
+            "Friends appear here once the connection is up."
+        };
+        l.para(atlas, text, grey(), left, list_top + 4.0, width);
+    }
+    // The name on the left, the status beside it, the buttons on the right —
+    // the status ends before the buttons begin.
+    let buttons_x = right - 120.0;
+    let name_w = (width * 0.42).floor();
+    let status_w = buttons_x - 6.0 - (left + 10.0 + name_w);
+    for (i, row) in rows.iter().enumerate().skip(scroll as usize).take(fit_rows as usize) {
+        let y = list_top + (i as i32 - scroll) as f32 * ROW;
+        let ty = y + 6.0;
+        match row {
+            Row::Invite(inv) => {
+                l.text(
+                    fit(atlas, &format!("{} invited you to {}", inv.from, inv.world), width - 112.0),
+                    yellow(),
+                    left,
+                    ty,
+                );
+                l.button(right - 108.0, y, 60.0, "Join", Action::InviteJoin(inv.id, inv.address.clone()), true);
+                l.button(right - 44.0, y, 44.0, "Later", Action::InviteDismiss(inv.id), true);
+            }
+            Row::Request(r) if r.incoming => {
+                l.text(
+                    fit(atlas, &format!("{} ({}) wants to be friends", r.name, r.code), width - 124.0),
+                    yellow(),
+                    left,
+                    ty,
+                );
+                l.button(right - 120.0, y, 60.0, "Accept", Action::Accept(r.id.clone()), true);
+                l.button(right - 56.0, y, 56.0, "Decline", Action::Decline(r.id.clone()), true);
+            }
+            Row::Request(r) => {
+                l.text(fit(atlas, &format!("{} · request sent", r.name), width - 64.0), grey(), left, ty);
+                l.button(right - 56.0, y, 56.0, "Cancel", Action::Remove(r.id.clone()), true);
+            }
+            Row::Friend(f) => {
+                let (status, color) = status_text(f);
+                l.mark(Mark::Dot { x: left + 2.0, y: ty + 1.0, color });
+                l.text(fit(atlas, &f.name, name_w - 2.0), WHITE, left + 10.0, ty);
+                let detail = match (&f.status[..], &f.world) {
+                    ("hosting", Some(world)) => format!("{status} · {world}"),
+                    _ => status.to_owned(),
+                };
+                l.text(fit(atlas, &detail, status_w), color, left + 10.0 + name_w, ty);
+                let removing = ui.confirm_remove.as_deref() == Some(f.id.as_str());
+                if removing {
+                    l.button(buttons_x, y, 96.0, "Remove friend?", Action::Remove(f.id.clone()), true);
+                } else if f.hosting() {
+                    l.button(
+                        buttons_x,
+                        y,
+                        50.0,
+                        "Join",
+                        Action::Join(f.address.clone().unwrap_or_default()),
+                        true,
+                    );
+                } else {
+                    l.button(
+                        buttons_x,
+                        y,
+                        50.0,
+                        "Invite",
+                        Action::Invite(f.id.clone()),
+                        f.online() && view.host.address.is_some(),
+                    );
+                }
+                if !removing {
+                    let unread = view.unread_of(&f.id);
+                    l.button(
+                        right - 66.0,
+                        y,
+                        42.0,
+                        if unread > 0 { format!("Chat {unread}") } else { "Chat".to_owned() },
+                        Action::OpenChat(f.id.clone()),
+                        true,
+                    );
+                }
+                l.button(
+                    right - 20.0,
+                    y,
+                    20.0,
+                    if removing { "✓" } else { "✕" },
+                    Action::Remove(f.id.clone()),
+                    true,
+                );
+            }
+        }
+        l.step();
+    }
+}
+
+fn chat_page(atlas: &HudAtlas, l: &mut Layout, f: &Frame, ui: &Ui, view: &View) {
+    let Frame {
+        left,
+        right,
+        width,
+        top,
+        bottom,
+    } = *f;
+    match &ui.chat_with {
+        None => {
+            let list_top = top;
+            let fit_rows = ((bottom - list_top) / ROW).floor().max(1.0) as i32;
+            let total = view.friends.len() as i32;
+            let scroll = ui.scroll.clamp(0, (total - fit_rows).max(0));
+            if total > fit_rows {
+                l.overflow = Some((total, fit_rows));
+            }
+            if view.friends.is_empty() {
+                l.text("Add a friend first — then chat here.", grey(), left, top + 4.0);
+            }
+            for (i, f) in view.friends.iter().enumerate().skip(scroll as usize).take(fit_rows as usize) {
+                let y = list_top + (i as i32 - scroll) as f32 * ROW;
+                let (_, color) = status_text(f);
+                l.mark(Mark::Dot { x: left + 2.0, y: y + 7.0, color });
+                l.text(fit(atlas, &f.name, width - 140.0), WHITE, left + 10.0, y + 6.0);
+                let unread = view.unread_of(&f.id);
+                if unread > 0 {
+                    l.text(format!("{unread} new"), yellow(), right - 110.0, y + 6.0);
+                }
+                l.button(right - 60.0, y, 60.0, "Open", Action::OpenChat(f.id.clone()), true);
+                l.step();
+            }
+        }
+        Some(id) => {
+            let name = view.name_of(id);
+            let online = view.friends.iter().find(|f| &f.id == id).is_some_and(Friend::online);
+            l.text(
+                fit(atlas, &format!("Chat with {name}{}", if online { "" } else { " (offline)" }), width - 64.0),
+                WHITE,
+                left,
+                top + 2.0,
+            );
+            l.button(right - 56.0, top - 4.0, 56.0, "Back", Action::ChatBack, true);
+            l.step();
+            // Messages, newest at the bottom, as many as fit above the input.
+            let input_y = bottom - 20.0;
+            let area_top = top + 16.0;
+            l.panel(left - 4.0, area_top - 4.0, width + 8.0, input_y - area_top);
+            let mut rendered: Vec<(String, u32)> = Vec::new();
+            for m in &view.chat {
+                let prefix = if m.mine { "You: " } else { "" };
+                let color = if m.mine { grey() } else { WHITE };
+                for line in wrap(&format!("{prefix}{}", m.body), width, atlas) {
+                    rendered.push((line, color));
+                }
+            }
+            if rendered.is_empty() {
+                rendered.push((format!("Say hi to {name}."), dim()));
+            }
+            let fit_lines = ((input_y - 8.0 - area_top) / 10.0).floor().max(1.0) as usize;
+            let start = rendered.len().saturating_sub(fit_lines);
+            for (i, (line, color)) in rendered.into_iter().skip(start).enumerate() {
+                l.text(line, color, left, area_top + i as f32 * 10.0);
+            }
+            l.step();
+            l.field(left, input_y, width - 64.0, Focus::Chat, &ui.chat_text, "Message…", ui.focus == Focus::Chat, false);
+            l.button(right - 60.0, input_y, 60.0, "Send", Action::Send, !ui.chat_text.trim().is_empty());
+        }
+    }
+}
+
+fn host_page(atlas: &HudAtlas, l: &mut Layout, f: &Frame, ui: &Ui, view: &View) {
+    let Frame {
+        left,
+        right,
+        width,
+        top,
+        bottom,
+    } = *f;
+    let hv = &view.host;
+    let mut y = top;
+    // The world card: its state and the publish buttons.
+    let card_top = y;
+    y += 6.0;
+    if !hv.in_world {
+        l.mark(Mark::Dot { x: left + 6.0, y: y + 1.0, color: dim() });
+        l.text("No world open", grey(), left + 14.0, y);
+        y += 12.0;
+        y = l.para(
+            atlas,
+            "Open a world to host it: friends join through its public address (e4mc, no VPN, no port forwarding).",
+            grey(),
+            left + 4.0,
+            y,
+            width - 8.0,
+        );
+        y += 6.0;
+    } else if hv.publishing {
+        l.mark(Mark::Dot { x: left + 6.0, y: y + 1.0, color: green() });
+        l.text(fit(atlas, &format!("{} · public", hv.world), width - 20.0), WHITE, left + 14.0, y);
+        y += 12.0;
+        match &hv.address {
+            Some(a) => y = l.para(atlas, &format!("Address: {a}"), blue(), left + 4.0, y, width - 8.0),
+            None => y = l.para(atlas, "Reaching the relay…", grey(), left + 4.0, y, width - 8.0),
+        }
+        let guests = match hv.guests {
+            0 => "Nobody has joined yet.".to_owned(),
+            1 => "1 guest connected.".to_owned(),
+            n => format!("{n} guests connected."),
+        };
+        y = l.para(atlas, &guests, grey(), left + 4.0, y, width - 8.0);
+        if let Some(p) = &hv.problem {
+            y = l.para(atlas, p, red(), left + 4.0, y, width - 8.0);
+        }
+        y += 4.0;
+        let bw = ((width - 16.0) / 3.0).floor();
+        l.button(
+            left + 4.0,
+            y,
+            bw,
+            if hv.copied { "Copied" } else { "Copy Address" },
+            Action::CopyAddress,
+            hv.address.is_some(),
+        );
+        l.button(left + 4.0 + bw + 4.0, y, bw, "Invite All", Action::InviteAll, hv.address.is_some());
+        l.button(left + 4.0 + 2.0 * (bw + 4.0), y, bw, "Stop", Action::StopPublish, true);
+        y += 26.0;
+    } else {
+        l.mark(Mark::Dot { x: left + 6.0, y: y + 1.0, color: yellow() });
+        l.text(fit(atlas, &format!("{} · private", hv.world), width - 20.0), WHITE, left + 14.0, y);
+        y += 12.0;
+        y = l.para(
+            atlas,
+            "Publish your world: it opens to LAN and gets a public address friends join from the Friends page or an invite.",
+            grey(),
+            left + 4.0,
+            y,
+            width - 8.0,
+        );
+        y += 4.0;
+        l.button(left + 4.0, y, width - 8.0, "Publish World", Action::Publish, hv.can_publish);
+        y += 26.0;
+    }
+    l.panel(left - 4.0, card_top - 4.0, width + 8.0, y - card_top + 4.0);
+    l.step();
+    if !hv.in_world {
+        return;
+    }
+    y += 8.0;
+    // The server card: what friends see.
+    let card_top = y;
+    y += 6.0;
+    l.text("What friends see", accent(), left + 4.0, y);
+    y += 12.0;
+    l.text("Server name (MOTD)", grey(), left + 4.0, y);
+    y += 11.0;
+    l.field(
+        left + 4.0,
+        y,
+        width - 72.0,
+        Focus::Motd,
+        &ui.motd,
+        "{world} - hosted by {name} / CS Launcher Plus",
+        ui.focus == Focus::Motd,
+        false,
+    );
+    l.button(right - 64.0, y, 60.0, "Save", Action::SaveMotd, true);
+    y += 24.0;
+    l.step();
+    let icon = ["CS Launcher icon", "This world's icon", "Custom file"][ui.icon.min(2)];
+    l.text(format!("Server icon: {icon}"), grey(), left + 4.0, y + 6.0);
+    l.button(right - 64.0, y, 60.0, "Change", Action::CycleIcon, true);
+    y += 22.0;
+    if ui.icon == 2 && y + 44.0 < bottom {
+        y = l.para(
+            atlas,
+            "Custom: a 64x64 cs-server-icon-custom.png in this profile's game folder.",
+            dim(),
+            left + 4.0,
+            y,
+            width - 8.0,
+        );
+        y += 2.0;
+    }
+    l.step();
+    l.text(format!("Players (you included): {}", ui.max_players.max(2)), grey(), left + 4.0, y + 6.0);
+    l.button(right - 64.0, y, 28.0, "-", Action::Players(-1), ui.max_players > 2);
+    l.button(right - 32.0, y, 28.0, "+", Action::Players(1), ui.max_players < 32);
+    y += 26.0;
+    l.panel(left - 4.0, card_top - 4.0, width + 8.0, y - card_top + 4.0);
+}
+
+fn voice_page(atlas: &HudAtlas, l: &mut Layout, f: &Frame, ui: &Ui, view: &View) {
+    let Frame {
+        left,
+        right,
+        width,
+        top,
+        bottom,
+    } = *f;
+    let vv = &view.voice;
+    let mut y = top;
+    // The microphone card: the orb, the switch, the mode and the state.
+    let card_top = y;
+    l.mark(Mark::Orb { x: left + 22.0, y: y + 22.0 });
+    l.mark(Mark::Toggle { x: right - 30.0, y: y + 7.0 });
+    l.toggle = Some([right - 34.0, y - 2.0, 30.0, 18.0]);
+    l.button(
+        right - 104.0,
+        y + 2.0,
+        66.0,
+        if vv.enabled { "Voice: ON" } else { "Voice: OFF" },
+        Action::VoiceEnabled,
+        true,
+    );
+    let state_x = left + 48.0;
+    let state_w = right - 104.0 - state_x;
+    let (state, color) = if !vv.enabled {
+        ("Voice chat is off", grey())
+    } else if !vv.in_world {
+        ("Join or host a world to talk", grey())
+    } else if !vv.available {
+        ("This server has no CS voice", red())
+    } else if vv.mic_problem.is_some() {
+        ("Microphone unavailable", red())
+    } else if vv.talking {
+        ("Transmitting", green())
+    } else if vv.ptt {
+        ("Ready · hold B to talk", WHITE)
+    } else {
+        ("Ready · open mic", WHITE)
+    };
+    l.text(fit(atlas, state, state_w), color, state_x, y + 8.0);
+    let hint = if !vv.enabled {
+        "Proximity voice for CS Engine worlds: no account, no extra app.".to_owned()
+    } else if let Some(p) = &vv.mic_problem {
+        format!("{p}. Allow the microphone, then come back.")
+    } else if vv.ptt {
+        "Push to talk: B, or the CS control bound to it. V opens this page.".to_owned()
+    } else {
+        "Open mic: sends when you speak. V opens this page.".to_owned()
+    };
+    l.text(fit(atlas, &hint, state_w + 36.0), dim(), state_x, y + 20.0);
+    y += 36.0;
+    if vv.enabled {
+        l.text(
+            format!("Mode: {}", if vv.ptt { "Push to talk" } else { "Open mic" }),
+            grey(),
+            left + 4.0,
+            y + 6.0,
+        );
+        l.button(right - 64.0, y, 60.0, "Change", Action::VoiceMode, true);
+        y += 24.0;
+        l.step();
+        // The sliders, side by side.
+        let sw = ((width - 16.0) / 3.0).floor();
+        l.slider(
+            left + 4.0,
+            y,
+            sw,
+            format!("Volume {}%", vv.volume),
+            vv.volume as f32 / 200.0,
+            Knob::Volume,
+            true,
+        );
+        l.slider(
+            left + 4.0 + sw + 4.0,
+            y,
+            sw,
+            format!("Mic {}%", vv.mic),
+            (vv.mic as f32 - 50.0) / 250.0,
+            Knob::Mic,
+            true,
+        );
+        l.slider(
+            left + 4.0 + 2.0 * (sw + 4.0),
+            y,
+            sw,
+            format!("Range {}", vv.range),
+            (vv.range as f32 - 8.0) / 248.0,
+            Knob::Range,
+            true,
+        );
+        y += 24.0;
+    }
+    l.panel(left - 4.0, card_top - 4.0, width + 8.0, y - card_top + 4.0);
+    l.step();
+    if !vv.enabled || !vv.in_world || !vv.available {
+        return;
+    }
+    y += 8.0;
+    // Invites received: a card each.
+    for (i, (from, group)) in vv.invites.iter().enumerate().take(3) {
+        l.panel(left - 4.0, y - 4.0, width + 8.0, 28.0);
+        l.mark(Mark::Dot { x: left + 4.0, y: y + 7.0, color: yellow() });
+        l.text(
+            fit(atlas, &format!("{from} invited you to {group}"), width - 124.0),
+            yellow(),
+            left + 12.0,
+            y + 6.0,
+        );
+        l.button(right - 108.0, y, 56.0, "Join", Action::VoiceInviteAccept(i), true);
+        l.button(right - 48.0, y, 44.0, "Later", Action::VoiceInviteDismiss(i), true);
+        y += 32.0;
+        l.step();
+    }
+    // A word from the server (joined, wrong password…).
+    if let Some((text, problem)) = &vv.notice {
+        l.text(
+            fit(atlas, text, width),
+            if *problem { red() } else { green() },
+            left,
+            y,
+        );
+        y += 14.0;
+    }
+    // The group card.
+    let card_top = y;
+    y += 6.0;
+    let mine = vv.groups.iter().find(|g| g.mine);
+    match mine {
+        Some(g) => {
+            if g.locked {
+                l.mark(Mark::Lock { x: left + 4.0, y: y - 1.0, color: green() });
+            } else {
+                l.mark(Mark::Dot { x: left + 5.0, y: y + 1.0, color: green() });
+            }
+            l.text(fit(atlas, &format!("Group · {}", g.name), width - 140.0), green(), left + 14.0, y);
+            l.button(
+                right - 128.0,
+                y - 6.0,
+                60.0,
+                if ui.inviting { "Close" } else { "Invite" },
+                Action::VoiceInviteToggle,
+                true,
+            );
+            l.button(right - 64.0, y - 6.0, 60.0, "Leave", Action::VoiceGroupLeave, true);
+            y += 16.0;
+            l.step();
+            if ui.inviting {
+                l.text("Invite to the group:", grey(), left + 4.0, y);
+                y += 11.0;
+                if vv.invitable.is_empty() {
+                    l.text("Everyone in the world is in your group already.", dim(), left + 4.0, y + 2.0);
+                    y += 14.0;
+                } else {
+                    for name in vv.invitable.iter().take(6) {
+                        l.text(fit(atlas, name, width - 80.0), WHITE, left + 4.0, y + 6.0);
+                        l.button(right - 64.0, y, 60.0, "Invite", Action::VoiceInvite(name.clone()), true);
+                        y += ROW;
+                        l.step();
+                    }
+                }
+            } else {
+                for (name, speaking, muted) in &g.members {
+                    let you = name == "You";
+                    let color = if *speaking {
+                        green()
+                    } else if *muted {
+                        red()
+                    } else if you {
+                        accent()
+                    } else {
+                        WHITE
+                    };
+                    l.mark(Mark::Speaking { x: left + 4.0, y: y + 3.0, active: *speaking, color });
+                    l.text(fit(atlas, name, width - 90.0), color, left + 18.0, y + 6.0);
+                    if !you {
+                        l.button(
+                            right - 64.0,
+                            y,
+                            60.0,
+                            if *muted { "Unmute" } else { "Mute" },
+                            Action::VoiceMute(name.clone()),
+                            true,
+                        );
+                    }
+                    y += ROW;
+                    l.step();
+                }
+                l.text(
+                    "Members hear each other anywhere in the world. Invited players join without the password.",
+                    dim(),
+                    left + 4.0,
+                    y,
+                );
+                y += 12.0;
+            }
+        }
+        None => match &ui.join_target {
+            Some(name) => {
+                l.mark(Mark::Lock { x: left + 4.0, y: y - 1.0, color: yellow() });
+                l.text(fit(atlas, &format!("{name} needs a password"), width - 20.0), yellow(), left + 14.0, y);
+                y += 14.0;
+                l.step();
+                l.field(
+                    left + 4.0,
+                    y,
+                    width - 136.0,
+                    Focus::Password,
+                    &ui.password,
+                    "Password",
+                    ui.focus == Focus::Password,
+                    true,
+                );
+                l.button(
+                    right - 128.0,
+                    y,
+                    60.0,
+                    "Join",
+                    Action::VoiceGroupJoin(name.clone()),
+                    !ui.password.trim().is_empty(),
+                );
+                l.button(right - 64.0, y, 60.0, "Cancel", Action::VoiceCancelPassword, true);
+                y += 26.0;
+            }
+            None => {
+                l.text("Create a group", accent(), left + 4.0, y);
+                y += 12.0;
+                l.step();
+                let fw = ((width - 80.0) / 2.0).floor();
+                l.field(
+                    left + 4.0,
+                    y,
+                    fw,
+                    Focus::Group,
+                    &ui.group_name,
+                    "Group name",
+                    ui.focus == Focus::Group,
+                    false,
+                );
+                l.field(
+                    left + 4.0 + fw + 4.0,
+                    y,
+                    fw,
+                    Focus::Password,
+                    &ui.password,
+                    "Password (optional)",
+                    ui.focus == Focus::Password,
+                    true,
+                );
+                l.button(
+                    right - 64.0,
+                    y,
+                    60.0,
+                    "Create",
+                    Action::VoiceGroupCreate,
+                    !ui.group_name.trim().is_empty(),
+                );
+                y += 26.0;
+            }
+        },
+    }
+    l.panel(left - 4.0, card_top - 4.0, width + 8.0, y - card_top + 4.0);
+    l.step();
+    y += 8.0;
+    // Other groups to join, then the players nearby to mute: one scrolled list.
+    enum Row<'a> {
+        Group(&'a GroupRow),
+        Player(&'a (String, bool, bool)),
+    }
+    let mut rows: Vec<Row> = Vec::new();
+    rows.extend(vv.groups.iter().filter(|g| !g.mine).map(Row::Group));
+    rows.extend(vv.players.iter().map(Row::Player));
+    let head_h = 12.0;
+    let list_top = y + head_h;
+    let fit_rows = ((bottom - list_top) / ROW).floor().max(1.0) as i32;
+    let total = rows.len() as i32;
+    let scroll = ui.scroll.clamp(0, (total - fit_rows).max(0));
+    if total > fit_rows {
+        l.overflow = Some((total, fit_rows));
+    }
+    let other_groups = vv.groups.iter().filter(|g| !g.mine).count();
+    let head = match (other_groups, vv.players.len()) {
+        (0, 0) => "Nobody else in the world yet".to_owned(),
+        (0, n) => format!("Players nearby ({n})"),
+        (g, n) => format!("Groups ({g}) · players ({n})"),
+    };
+    l.text(head, accent(), left, y);
+    l.step();
+    for (i, row) in rows.iter().enumerate().skip(scroll as usize).take(fit_rows as usize) {
+        let y = list_top + (i as i32 - scroll) as f32 * ROW;
+        match row {
+            Row::Group(g) => {
+                if g.locked {
+                    l.mark(Mark::Lock { x: left + 2.0, y: y + 5.0, color: grey() });
+                } else {
+                    l.mark(Mark::Dot { x: left + 3.0, y: y + 7.0, color: grey() });
+                }
+                let who: Vec<&str> = g.members.iter().map(|m| m.0.as_str()).collect();
+                let text = format!("{}  ({})", g.name, who.join(", "));
+                l.text(fit(atlas, &text, width - 84.0), WHITE, left + 12.0, y + 6.0);
+                let action = if g.locked {
+                    Action::VoiceAskPassword(g.name.clone())
+                } else {
+                    Action::VoiceGroupJoin(g.name.clone())
+                };
+                l.button(right - 64.0, y, 60.0, "Join", action, true);
+            }
+            Row::Player((name, muted, heard)) => {
+                let color = if *heard {
+                    green()
+                } else if *muted {
+                    red()
+                } else {
+                    WHITE
+                };
+                l.mark(Mark::Speaking { x: left, y: y + 3.0, active: *heard, color });
+                l.text(fit(atlas, name, width - 84.0), color, left + 14.0, y + 6.0);
+                l.button(
+                    right - 64.0,
+                    y,
+                    60.0,
+                    if *muted { "Unmute" } else { "Mute" },
+                    Action::VoiceMute(name.clone()),
+                    true,
+                );
+            }
+        }
+        l.step();
     }
 }
 
@@ -905,6 +1349,117 @@ fn label(key: &str) -> Text {
         Text::translate(key, &[])
     } else {
         Text::literal(key)
+    }
+}
+
+/// What was drawn since `start` settles in: it rises into place and fades
+/// in; `false` when it is not due yet (and was dropped).
+fn settle_since(batch: &mut HudBatch, start: usize, anim: &Anim, delay: f32) -> bool {
+    let p = settle(anim, delay);
+    if p <= 0.0 {
+        batch.vertices.truncate(start);
+        return false;
+    }
+    if p >= 1.0 {
+        return true;
+    }
+    let dy = (1.0 - p) * 10.0;
+    for v in &mut batch.vertices[start..] {
+        v.pos[1] += dy;
+        v.color = with_alpha(v.color, p);
+    }
+    true
+}
+
+/// A filled disc, as a fan of quads (each spans two of the sixteen segments).
+fn disc(batch: &mut HudBatch, atlas: &HudAtlas, cx: f32, cy: f32, r: f32, color: u32) {
+    const N: usize = 16;
+    let step = 2.0 * std::f32::consts::PI / N as f32;
+    let p = |a: f32| [cx + r * a.cos(), cy + r * a.sin()];
+    for i in 0..N / 2 {
+        let a0 = i as f32 * 2.0 * step;
+        batch.fill_quad(atlas, [[cx, cy], p(a0), p(a0 + step), p(a0 + 2.0 * step)], color);
+    }
+}
+/// A ring between two radii.
+fn ring(batch: &mut HudBatch, atlas: &HudAtlas, cx: f32, cy: f32, r0: f32, r1: f32, color: u32) {
+    const N: usize = 20;
+    for i in 0..N {
+        let a0 = i as f32 * 2.0 * std::f32::consts::PI / N as f32;
+        let a1 = a0 + 2.0 * std::f32::consts::PI / N as f32;
+        let p = |a: f32, r: f32| [cx + r * a.cos(), cy + r * a.sin()];
+        batch.fill_quad(atlas, [p(a0, r0), p(a0, r1), p(a1, r1), p(a1, r0)], color);
+    }
+}
+/// A 1px frame round a rectangle.
+fn frame(batch: &mut HudBatch, atlas: &HudAtlas, x: f32, y: f32, w: f32, h: f32, color: u32) {
+    batch.fill(atlas, x, y, w, 1.0, color);
+    batch.fill(atlas, x, y + h - 1.0, w, 1.0, color);
+    batch.fill(atlas, x, y, 1.0, h, color);
+    batch.fill(atlas, x + w - 1.0, y, 1.0, h, color);
+}
+
+fn draw_mark(batch: &mut HudBatch, atlas: &HudAtlas, mark: &Mark, anim: &Anim, view: &View) {
+    match *mark {
+        Mark::Speaking { x, y, active, color } => {
+            for i in 0..3 {
+                let h = if active {
+                    let phase = anim.clock * 9.0 + i as f32 * 1.4;
+                    3.0 + 5.0 * phase.sin().abs()
+                } else {
+                    2.0
+                };
+                let c = if active { color } else { with_alpha(color, 0.45) };
+                batch.fill(atlas, x + i as f32 * 3.0, y + 8.0 - h, 2.0, h, c);
+            }
+        }
+        Mark::Dot { x, y, color } => {
+            let r = 2.5;
+            batch.fill_quad(atlas, [[x + r, y], [x + 2.0 * r, y + r], [x + r, y + 2.0 * r], [x, y + r]], color);
+        }
+        Mark::Lock { x, y, color } => {
+            // The shackle, then the body.
+            frame(batch, atlas, x + 1.0, y, 5.0, 4.0, color);
+            batch.fill(atlas, x, y + 3.0, 7.0, 6.0, color);
+            batch.fill(atlas, x + 3.0, y + 5.0, 1.0, 2.0, rgba(0, 0, 0, 200));
+        }
+        Mark::Toggle { x, y } => {
+            let t = anim.enabled.clamp(0.0, 1.0);
+            let track = lerp_color(rgba(70, 70, 76, 255), rgba(94, 214, 140, 255), t);
+            batch.fill(atlas, x, y, 22.0, 10.0, track);
+            frame(batch, atlas, x, y, 22.0, 10.0, rgba(0, 0, 0, 120));
+            let kx = x + 1.0 + t * 12.0;
+            batch.fill(atlas, kx, y + 1.0, 8.0, 8.0, WHITE);
+        }
+        Mark::Orb { x, y } => {
+            let vv = &view.voice;
+            let live = vv.enabled && vv.in_world && vv.available && vv.mic_problem.is_none();
+            let breath = (anim.clock * 1.8).sin() * 0.6;
+            let level = anim.level.clamp(0.0, 1.0);
+            let talk = anim.talking.clamp(0.0, 1.0);
+            let base = if !vv.enabled {
+                rgba(90, 90, 96, 255)
+            } else if !live {
+                rgba(150, 150, 156, 255)
+            } else {
+                lerp_color(rgba(94, 200, 255, 255), rgba(94, 214, 140, 255), talk)
+            };
+            // The halo swells with the voice; a quiet one breathes.
+            let halo = 13.0 + breath + level * 9.0 + talk * 2.0;
+            ring(batch, atlas, x, y, 10.0, halo, with_alpha(base, 0.18 + 0.25 * talk.max(level)));
+            ring(batch, atlas, x, y, 9.0, 10.0, with_alpha(base, 0.6));
+            disc(batch, atlas, x, y, 8.0 + level * 1.5, with_alpha(base, 0.9));
+            // The microphone glyph: a capsule and its stand.
+            let ink = rgba(16, 16, 20, 255);
+            batch.fill(atlas, x - 1.5, y - 5.0, 3.0, 6.0, ink);
+            frame(batch, atlas, x - 3.0, y - 2.0, 6.0, 5.0, ink);
+            batch.fill(atlas, x - 0.5, y + 3.0, 1.0, 2.0, ink);
+            batch.fill(atlas, x - 2.0, y + 4.5, 4.0, 1.0, ink);
+            if !vv.enabled {
+                // Struck through.
+                batch.fill_quad(atlas, [[x - 6.0, y + 5.0], [x - 5.0, y + 6.0], [x + 6.0, y - 5.0], [x + 5.0, y - 6.0]], red());
+            }
+        }
     }
 }
 
@@ -918,23 +1473,54 @@ pub fn draw(
 ) {
     let (w, h) = (batch.width, batch.height);
     ui::menu_background(batch, atlas, 0.0, 0.0, w, h, in_world);
-    let title = Text::literal(TITLE);
+    let anim = &ui.anim;
+    // The title settles first, with a line sweeping out under it.
+    let start = batch.vertices.len();
+    let title = Text::literal(ui.tab.title());
     let tw = atlas.font.width_text(&title);
-    batch.text_styled(atlas, &title, ((w - tw) / 2.0).floor(), 8.0, WHITE, true);
+    let tx = ((w - tw) / 2.0).floor();
+    batch.text_styled(atlas, &title, tx, 8.0, WHITE, true);
+    let sweep = ease_out(anim.page / (PAGE_IN * 1.5));
+    let lw = (tw + 16.0) * sweep;
+    batch.fill(atlas, tx + tw / 2.0 - lw / 2.0, 19.0, lw, 1.0, with_alpha(accent(), 0.7 * sweep));
+    settle_since(batch, start, anim, 0.0);
     let l = layout(atlas, (w, h), ui, view);
-    for (text, color, x, y) in l.lines {
-        batch.text(atlas, &text, x, y, color, true);
+    for p in &l.panels {
+        let start = batch.vertices.len();
+        batch.fill(atlas, p.x, p.y, p.w, p.h, card());
+        frame(batch, atlas, p.x, p.y, p.w, p.h, card_edge());
+        settle_since(batch, start, anim, p.delay);
     }
-    for f in l.fields {
-        let border = if f.focused { WHITE } else { grey() };
+    for line in &l.lines {
+        let start = batch.vertices.len();
+        batch.text(atlas, &line.text, line.x, line.y, line.color, true);
+        settle_since(batch, start, anim, line.delay);
+    }
+    for m in &l.marks {
+        let start = batch.vertices.len();
+        draw_mark(batch, atlas, &m.mark, anim, view);
+        settle_since(batch, start, anim, m.delay);
+    }
+    for f in &l.fields {
+        let start = batch.vertices.len();
+        let pulse = 0.5 + 0.5 * (anim.clock * 4.0).sin();
+        let border = if f.focused {
+            lerp_color(grey(), WHITE, 0.4 + 0.6 * pulse)
+        } else {
+            grey()
+        };
         batch.fill(atlas, f.x - 1.0, f.y - 1.0, f.w + 2.0, 22.0, border);
         batch.fill(atlas, f.x, f.y, f.w, 20.0, rgba(0, 0, 0, 255));
         let inner = f.w - 8.0;
         if f.value.is_empty() && !f.focused {
             batch.text(atlas, &fit(atlas, f.placeholder, inner), f.x + 4.0, f.y + 6.0, dim(), true);
         } else {
-            // The tail of a long value stays in view.
-            let mut shown = f.value.clone();
+            // The tail of a long value stays in view; a password shows as dots.
+            let mut shown = if f.secret {
+                "•".repeat(f.value.chars().count())
+            } else {
+                f.value.clone()
+            };
             while HudBatch::text_width(atlas, &shown) > inner && !shown.is_empty() {
                 shown.remove(0);
             }
@@ -943,31 +1529,83 @@ pub fn draw(
                 batch.text(atlas, "_", f.x + 4.0 + adv, f.y + 6.0, WHITE, true);
             }
         }
+        settle_since(batch, start, anim, f.delay);
     }
-    for b in l.buttons {
+    for s in &l.sliders {
+        let start = batch.vertices.len();
+        let hover = s.active && ui::hovered(cursor, s.x, s.y, s.w, 20.0);
+        ui::slider(batch, atlas, s.x, s.y, s.w, &Text::literal(&s.label), s.value, hover, s.active, false);
+        settle_since(batch, start, anim, s.delay);
+    }
+    for b in &l.buttons {
+        let start = batch.vertices.len();
         let hover = b.active && ui::hovered(cursor, b.x, b.y, b.w, 20.0);
         ui::button(batch, atlas, b.x, b.y, b.w, 20.0, &label(&b.label), b.active, hover);
+        if hover {
+            // A hovered button leans forward.
+            let glow = anim.hover.map_or(0.0, |(_, g)| g);
+            let s = 1.0 + 0.03 * glow;
+            batch.scale_since(start, b.x + b.w / 2.0, b.y + 10.0, s, s);
+            frame(batch, atlas, b.x - 1.0, b.y - 1.0, b.w + 2.0, 22.0, with_alpha(WHITE, 0.35 * glow));
+        }
+        settle_since(batch, start, anim, b.delay);
+    }
+    // The ripple of the last press.
+    if let Some(([x, y, bw, bh], age)) = anim.pressed {
+        let t = (age / RIPPLE).clamp(0.0, 1.0);
+        let grow = ease_out(t) * 6.0;
+        frame(
+            batch,
+            atlas,
+            x - grow,
+            y - grow,
+            bw + 2.0 * grow,
+            bh + 2.0 * grow,
+            with_alpha(WHITE, 0.6 * (1.0 - t)),
+        );
     }
 }
 
-/// The button or field under a click.
-pub fn click(atlas: &HudAtlas, size: (f32, f32), cursor: (f32, f32), ui: &Ui, view: &View) -> Option<Action> {
+/// The button, slider or field under a click, and its box (for the ripple).
+pub fn click(atlas: &HudAtlas, size: (f32, f32), cursor: (f32, f32), ui: &Ui, view: &View) -> Option<(Action, [f32; 4])> {
     let l = layout(atlas, size, ui, view);
     if let Some(b) = l
         .buttons
         .into_iter()
         .find(|b| b.active && ui::hovered(cursor, b.x, b.y, b.w, 20.0))
     {
-        return Some(b.action);
+        return Some((b.action, [b.x, b.y, b.w, 20.0]));
+    }
+    if let Some([x, y, w, h]) = l.toggle
+        && ui::hovered(cursor, x, y, w, h)
+    {
+        return Some((Action::VoiceEnabled, [x, y, w, h]));
+    }
+    if let Some(s) = l
+        .sliders
+        .into_iter()
+        .find(|s| s.active && ui::hovered(cursor, s.x, s.y, s.w, 20.0))
+    {
+        let value = ui::slider_value(s.x, s.w, cursor.0);
+        return Some((Action::VoiceSet(s.knob, value), [s.x, s.y, s.w, 20.0]));
     }
     if let Some(f) = l
         .fields
         .into_iter()
         .find(|f| ui::hovered(cursor, f.x, f.y, f.w, 20.0))
     {
-        return Some(Action::Focus(f.focus));
+        return Some((Action::Focus(f.focus), [f.x, f.y, f.w, 20.0]));
     }
-    Some(Action::Focus(Focus::None))
+    Some((Action::Focus(Focus::None), [cursor.0, cursor.1, 0.0, 0.0]))
+}
+
+/// The button under the cursor (its box), for the hover glow.
+pub fn hovered_box(atlas: &HudAtlas, size: (f32, f32), cursor: (f32, f32), ui: &Ui, view: &View) -> Option<[f32; 4]> {
+    layout(atlas, size, ui, view)
+        .buttons
+        .into_iter()
+        .find(|b| b.active && ui::hovered(cursor, b.x, b.y, b.w, 20.0))
+        .map(|b| [b.x, b.y, b.w, 20.0])
 }
 
 /// The rows the open list can scroll by (for the mouse wheel).
@@ -993,9 +1631,12 @@ mod tests {
     fn atlas() -> HudAtlas {
         HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets")).unwrap()
     }
+    fn press(atlas: &HudAtlas, size: (f32, f32), at: (f32, f32), ui: &Ui, view: &View) -> Option<Action> {
+        click(atlas, size, at, ui, view).map(|(a, _)| a)
+    }
 
     #[test]
-    fn tabs_fields_and_done_are_clickable() {
+    fn pages_fields_and_done_are_clickable_and_nothing_overlaps_the_buttons() {
         let atlas = atlas();
         let size = (427.0, 240.0);
         let ui = Ui::default();
@@ -1009,23 +1650,111 @@ mod tests {
                 code: "CS-1".into(),
                 status: "hosting".into(),
                 address: Some("abc.e4mc.link".into()),
-                world: Some("World".into()),
+                world: Some("A very long world name indeed".into()),
             }],
             ..View::default()
         };
         let l = layout(&atlas, size, &ui, &view);
         let done = l.buttons.iter().find(|b| b.action == Action::Done).unwrap();
-        assert_eq!(click(&atlas, size, (done.x + 1.0, done.y + 1.0), &ui, &view), Some(Action::Done));
+        assert_eq!(press(&atlas, size, (done.x + 1.0, done.y + 1.0), &ui, &view), Some(Action::Done));
         let join = l.buttons.iter().find(|b| matches!(b.action, Action::Join(_))).unwrap();
         assert_eq!(
-            click(&atlas, size, (join.x + 1.0, join.y + 1.0), &ui, &view),
+            press(&atlas, size, (join.x + 1.0, join.y + 1.0), &ui, &view),
             Some(Action::Join("abc.e4mc.link".into()))
         );
+        // The status text ends before the Join button starts.
+        let status = l.lines.iter().find(|t| t.text.starts_with("Hosting")).unwrap();
+        assert!(status.x + HudBatch::text_width(&atlas, &status.text) <= join.x, "status under the button");
         let field = &l.fields[0];
         assert_eq!(
-            click(&atlas, size, (field.x + 2.0, field.y + 2.0), &ui, &view),
+            press(&atlas, size, (field.x + 2.0, field.y + 2.0), &ui, &view),
             Some(Action::Focus(Focus::AddCode))
         );
-        assert!(l.lines.iter().all(|(_, _, _, y)| *y + 9.0 <= size.1 - 27.0));
+        assert!(l.lines.iter().all(|t| t.y + 9.0 <= size.1 - 27.0));
+        for tab in [Tab::Chat, Tab::Host, Tab::Voice] {
+            let voice = l.buttons.iter().find(|b| b.action == Action::Tab(tab)).unwrap();
+            assert_eq!(press(&atlas, size, (voice.x + 1.0, voice.y + 1.0), &ui, &view), Some(Action::Tab(tab)));
+        }
+    }
+
+    #[test]
+    fn the_voice_page_creates_joins_and_asks_for_passwords() {
+        let atlas = atlas();
+        let size = (427.0, 240.0);
+        let mut ui = Ui::default();
+        ui.go(Tab::Voice);
+        ui.group_name = "squad".into();
+        let mut view = View::default();
+        view.voice = VoiceView {
+            enabled: true,
+            ptt: true,
+            volume: 100,
+            mic: 100,
+            range: 48,
+            available: true,
+            in_world: true,
+            groups: vec![
+                GroupRow {
+                    name: "Open".into(),
+                    locked: false,
+                    members: vec![("Alex".into(), true, false)],
+                    mine: false,
+                },
+                GroupRow {
+                    name: "Locked".into(),
+                    locked: true,
+                    members: vec![("Bob".into(), false, false)],
+                    mine: false,
+                },
+            ],
+            players: vec![("Alex".into(), false, true), ("Bob".into(), true, false)],
+            ..VoiceView::default()
+        };
+        let l = layout(&atlas, size, &ui, &view);
+        let create = l.buttons.iter().find(|b| b.action == Action::VoiceGroupCreate).unwrap();
+        assert!(create.active);
+        assert_eq!(press(&atlas, size, (create.x + 1.0, create.y + 1.0), &ui, &view), Some(Action::VoiceGroupCreate));
+        assert!(l.buttons.iter().any(|b| b.action == Action::VoiceGroupJoin("Open".into())));
+        assert!(l.buttons.iter().any(|b| b.action == Action::VoiceAskPassword("Locked".into())));
+        assert!(l.buttons.iter().any(|b| b.action == Action::VoiceMute("Bob".into())));
+        let volume = l.sliders.iter().find(|s| s.knob == Knob::Volume).unwrap();
+        match press(&atlas, size, (volume.x + volume.w - 4.0, volume.y + 1.0), &ui, &view) {
+            Some(Action::VoiceSet(Knob::Volume, v)) => assert!((v - 1.0).abs() < 0.01),
+            other => panic!("not the volume slider: {other:?}"),
+        }
+        // The password prompt replaces the create form.
+        ui.join_target = Some("Locked".into());
+        ui.password = "pw".into();
+        let l = layout(&atlas, size, &ui, &view);
+        assert!(l.buttons.iter().any(|b| b.action == Action::VoiceGroupJoin("Locked".into()) && b.active));
+        assert!(l.fields.iter().any(|f| f.focus == Focus::Password && f.secret));
+        assert!(!l.buttons.iter().any(|b| b.action == Action::VoiceGroupCreate));
+        // In a group: members, Invite and Leave; the invite picker lists the others.
+        view.voice.groups[0].mine = true;
+        view.voice.groups[0].members.insert(0, ("You".into(), false, false));
+        view.voice.invitable = vec!["Bob".into()];
+        ui.join_target = None;
+        let l = layout(&atlas, size, &ui, &view);
+        assert!(l.buttons.iter().any(|b| b.action == Action::VoiceGroupLeave));
+        assert!(l.buttons.iter().any(|b| b.action == Action::VoiceInviteToggle));
+        assert!(l.buttons.iter().any(|b| b.action == Action::VoiceMute("Alex".into())));
+        ui.inviting = true;
+        let l = layout(&atlas, size, &ui, &view);
+        assert!(l.buttons.iter().any(|b| b.action == Action::VoiceInvite("Bob".into())));
+    }
+
+    #[test]
+    fn pages_settle_in_and_eased_values_chase_their_targets() {
+        let mut anim = Anim::default();
+        assert_eq!(settle(&anim, 0.0), 0.0);
+        anim.page = PAGE_IN;
+        assert!((settle(&anim, 0.0) - 1.0).abs() < 1e-6);
+        assert!(settle(&anim, STAGGER) < 1.0);
+        anim.last = Some(Instant::now() - std::time::Duration::from_millis(50));
+        anim.tick(true, false, true, 0.8);
+        assert!(anim.enabled > 0.0 && anim.enabled < 1.0);
+        assert!(anim.level > 0.0);
+        assert_eq!(with_alpha(0xFF00_0000, 0.5), 0x8000_0000);
+        assert_eq!(lerp_color(rgba(0, 0, 0, 255), rgba(255, 255, 255, 255), 0.0), rgba(0, 0, 0, 255));
     }
 }
