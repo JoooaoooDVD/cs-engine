@@ -126,7 +126,8 @@ impl Anim {
         chase(&mut self.enabled, f32::from(u8::from(enabled)), 14.0);
         chase(&mut self.ptt, f32::from(u8::from(ptt)), 14.0);
         chase(&mut self.talking, f32::from(u8::from(talking)), 12.0);
-        chase(&mut self.level, level, if level > self.level { 30.0 } else { 8.0 });
+        let rising = level > self.level;
+        chase(&mut self.level, level, if rising { 30.0 } else { 8.0 });
         if let Some((_, age)) = &mut self.pressed {
             *age += dt;
             if *age > RIPPLE {
