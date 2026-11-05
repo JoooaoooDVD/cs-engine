@@ -59,6 +59,7 @@
   "cs.menu.hud_editor": "HUD Editor",
   "cs.menu.exit": "Exit Game",
   "key.cs_voice": "CS Voice: Push to Talk",
+  "key.cs_voice_menu": "CS Voice: Menu (groups, mute)",
   "horizon.mods.native_unsupported": " (Native .hnmod - not supported)",
   "horizon.mods.dev": " (Dev)",
   "horizon.mods.settings": "Settings",

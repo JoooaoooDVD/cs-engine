@@ -24,8 +24,9 @@ pub const MAPPINGS: &[(&str, &str, &str)] = &[
     ("key.command", "key.keyboard.slash", "multiplayer"),
     ("key.friends", "key.keyboard.o", "multiplayer"),
     ("key.socialInteractions", "key.keyboard.p", "multiplayer"),
-    // CS Engine: voice chat push-to-talk (game/cs_voice.rs).
-    ("key.cs_voice", "key.keyboard.v", "multiplayer"),
+    // CS Engine: voice chat push-to-talk and the voice menu (game/cs_voice.rs).
+    ("key.cs_voice", "key.keyboard.b", "multiplayer"),
+    ("key.cs_voice_menu", "key.keyboard.v", "multiplayer"),
     ("key.toggleGui", "key.keyboard.f1", "misc"),
     (
         "key.toggleSpectatorShaderEffects",

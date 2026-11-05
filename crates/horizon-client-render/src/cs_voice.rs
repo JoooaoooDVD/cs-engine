@@ -91,21 +91,43 @@ impl Adpcm {
     }
 }
 
-/// One frame of 320 samples as 163 bytes.
-pub fn encode_frame(samples: &[i16; FRAME]) -> [u8; FRAME_BYTES] {
-    let mut out = [0u8; FRAME_BYTES];
-    let mut st = Adpcm {
-        predictor: i32::from(samples[0]),
-        index: 0,
-    };
-    out[0..2].copy_from_slice(&(samples[0]).to_be_bytes());
-    out[2] = 0;
-    for (i, pair) in samples.chunks(2).enumerate() {
-        let hi = st.encode_sample(pair[0]);
-        let lo = st.encode_sample(pair[1]);
-        out[3 + i] = (hi << 4) | lo;
+/// A speaker's encoder: the codec's state carries from one frame to the
+/// next, and each frame writes the state it starts from into its header, so
+/// the decoder needs nothing but the frame (a lost one hurts only itself)
+/// while the step size no longer restarts from the smallest at every 20 ms
+/// (that restart was audible as a rasp on every frame edge).
+#[derive(Clone, Copy, Default)]
+pub struct Encoder {
+    st: Adpcm,
+}
+impl Encoder {
+    /// One frame of 320 samples as 163 bytes.
+    pub fn encode(&mut self, samples: &[i16; FRAME]) -> [u8; FRAME_BYTES] {
+        let mut out = [0u8; FRAME_BYTES];
+        out[0..2].copy_from_slice(&(self.st.predictor as i16).to_be_bytes());
+        out[2] = self.st.index as u8;
+        for (i, pair) in samples.chunks(2).enumerate() {
+            let hi = self.st.encode_sample(pair[0]);
+            let lo = self.st.encode_sample(pair[1]);
+            out[3 + i] = (hi << 4) | lo;
+        }
+        out
     }
-    out
+    /// Silence passed: start the next frame afresh.
+    pub fn reset(&mut self) {
+        self.st = Adpcm::default();
+    }
+}
+
+/// One frame of 320 samples as 163 bytes, from a fresh encoder.
+pub fn encode_frame(samples: &[i16; FRAME]) -> [u8; FRAME_BYTES] {
+    Encoder {
+        st: Adpcm {
+            predictor: i32::from(samples[0]),
+            index: 0,
+        },
+    }
+    .encode(samples)
 }
 
 /// A frame's 320 samples; `None` for a slice of the wrong size.
@@ -138,11 +160,16 @@ struct Source {
     /// Fractional position between `prev` and the queue's front.
     frac: f64,
     prev: f32,
+    /// The queue ran dry: the last sample eases to silence instead of
+    /// stopping dead (a click at every gap).
+    fading: bool,
     fed: Instant,
 }
-/// Samples queued before a voice starts (80 ms): network jitter this large is
+/// Samples queued before a voice starts (100 ms): network jitter this large is
 /// absorbed in silence rather than heard as gaps.
-const START: usize = FRAME * 4;
+const START: usize = FRAME * 5;
+/// A voice heard from everywhere at full volume (a group): its range is 0.
+pub const GROUP_RANGE: f32 = 0.0;
 /// Samples queued at most (400 ms): past it the oldest go, so a slow link
 /// never builds a lag that outlives the sentence.
 const CAP: usize = FRAME * 20;
@@ -172,6 +199,7 @@ impl VoiceMix {
             playing: false,
             frac: 0.0,
             prev: 0.0,
+            fading: false,
             fed: Instant::now(),
         });
         s.at = at;
@@ -221,9 +249,11 @@ impl VoiceMix {
         let volume = self.volume.clamp(0.0, 2.0);
         // Voices idle for a while are forgotten.
         self.sources
-            .retain(|_, s| s.playing || !s.queue.is_empty() || s.fed.elapsed().as_secs() < 30);
+            .retain(|_, s| {
+                s.playing || s.fading || !s.queue.is_empty() || s.fed.elapsed().as_secs() < 30
+            });
         for s in self.sources.values_mut() {
-            if !s.playing {
+            if !s.playing && !s.fading {
                 continue;
             }
             let d = [
@@ -232,17 +262,28 @@ impl VoiceMix {
                 f64::from(s.at[2]) - listener[2],
             ];
             let distance = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() as f32;
-            let gain = volume * distance_gain(Some(s.range), distance);
+            // A group voice (range 0) is heard everywhere, in the middle, at
+            // full volume; a proximity one falls off to its range, panned.
+            let group = s.range <= GROUP_RANGE;
+            let gain = if group {
+                volume
+            } else {
+                volume * distance_gain(Some(s.range), distance)
+            };
             // Near the listener a voice sits in the middle: no hard panning
             // when a friend stands right beside.
-            let [mut l, mut r] = stereo_gains(dot(d, right), dot(d, up), dot(d, forward));
+            let [mut l, mut r] = if group {
+                [1.0, 1.0]
+            } else {
+                stereo_gains(dot(d, right), dot(d, up), dot(d, forward))
+            };
             let near = (distance / 4.0).clamp(0.0, 1.0);
             let mid = (l + r) / 2.0;
             l = mid + (l - mid) * near;
             r = mid + (r - mid) * near;
             for frame in data.chunks_mut(channels) {
                 // Advance to the output's position in the voice's samples.
-                while s.frac >= 1.0 {
+                while s.playing && s.frac >= 1.0 {
                     match s.queue.pop_front() {
                         Some(v) => {
                             s.prev = v;
@@ -250,23 +291,33 @@ impl VoiceMix {
                         }
                         None => {
                             s.playing = false;
+                            s.fading = s.prev.abs() > 1e-4;
                             s.frac = 0.0;
-                            break;
                         }
                     }
                 }
-                if !s.playing {
+                let v = if s.playing {
+                    let next = s.queue.front().copied().unwrap_or(s.prev);
+                    s.prev + (next - s.prev) * s.frac as f32
+                } else if s.fading {
+                    // Ease the last sample out over a few milliseconds.
+                    s.prev *= 0.96;
+                    if s.prev.abs() <= 1e-4 {
+                        s.fading = false;
+                    }
+                    s.prev
+                } else {
                     break;
-                }
-                let next = s.queue.front().copied().unwrap_or(s.prev);
-                let v = s.prev + (next - s.prev) * s.frac as f32;
+                };
                 if channels >= 2 {
                     frame[0] += v * gain * l;
                     frame[1] += v * gain * r;
                 } else {
                     frame[0] += v * gain;
                 }
-                s.frac += step;
+                if s.playing {
+                    s.frac += step;
+                }
             }
         }
     }
@@ -369,7 +420,7 @@ impl Mic {
         let mut s = crate::android_runtime::host_mic_take();
         if (gain - 1.0).abs() > 0.01 {
             for v in &mut s {
-                *v = (f32::from(*v) * gain).clamp(-32768.0, 32767.0) as i16;
+                *v = (soft_clip(f32::from(*v) / 32768.0 * gain) * 32767.0) as i16;
             }
         }
         s
@@ -456,7 +507,7 @@ fn take_resampled(b: &mut MicBuf, gain: f32) -> Vec<i16> {
         let c = src[next_i as usize];
         let v = (a + (c - a) * t) * gain;
         peak = peak.max(v.abs());
-        out.push((v.clamp(-1.0, 1.0) * 32767.0) as i16);
+        out.push((soft_clip(v) * 32767.0) as i16);
         pos += step;
     }
     b.prev = src[src.len() - 1];
@@ -485,9 +536,75 @@ impl Mic {
     }
 }
 
+/// Gain without the crunch: linear to 0.8, then a soft knee that never
+/// reaches 1 (a loud word distorts gently instead of squaring off).
+pub fn soft_clip(x: f32) -> f32 {
+    const KNEE: f32 = 0.8;
+    let a = x.abs();
+    if a <= KNEE {
+        return x;
+    }
+    let over = a - KNEE;
+    let soft = KNEE + (1.0 - KNEE) * (over / ((1.0 - KNEE) + over));
+    soft.copysign(x)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_encoder_state_carries_and_each_frame_still_stands_alone() {
+        let mut samples = [0i16; FRAME];
+        for (i, s) in samples.iter_mut().enumerate() {
+            *s = ((i as f32 * 0.3).sin() * 20000.0) as i16;
+        }
+        let mut enc = Encoder::default();
+        let first = enc.encode(&samples);
+        let second = enc.encode(&samples);
+        assert_eq!(first[2], 0, "a fresh encoder starts at step 0");
+        assert!(second[2] > 0, "the step carries into the next frame");
+        let mean_err = |dec: &[i16; FRAME]| {
+            samples
+                .iter()
+                .zip(dec)
+                .map(|(a, b)| f64::from(*a - *b).abs())
+                .sum::<f64>()
+                / FRAME as f64
+        };
+        // The second frame decodes on its own, closer than a restart would be.
+        let err = mean_err(&decode_frame(&second).expect("a frame"));
+        let err_restart = mean_err(&decode_frame(&encode_frame(&samples)).expect("a frame"));
+        assert!(err < err_restart, "carried {err} vs restart {err_restart}");
+        assert!((soft_clip(0.5) - 0.5).abs() < 1e-6);
+        assert!(soft_clip(3.0) < 1.0 && soft_clip(3.0) > 0.9);
+        assert!(soft_clip(-3.0) > -1.0);
+    }
+
+    #[test]
+    fn a_group_voice_is_heard_anywhere_and_a_gap_fades_out() {
+        let mut m = VoiceMix::default();
+        let frame = [8000i16; FRAME];
+        for _ in 0..5 {
+            m.push(9, [500.0, 0.0, 0.0], GROUP_RANGE, &frame);
+        }
+        let mut out = vec![0.0f32; 64];
+        let id = ([0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]);
+        let dg = |_: Option<f32>, _: f32| 0.0;
+        let sg = |_: f32, _: f32, _: f32| [0.0, 0.0];
+        m.mix(&mut out, 2, 16_000, [0.0; 3], id, dg, sg);
+        assert!(
+            out[4..].iter().all(|v| (*v - 8000.0 / 32768.0).abs() < 1e-3),
+            "full, centred, 500 blocks away"
+        );
+        // Drain the queue: the tail eases down instead of cutting.
+        let mut big = vec![0.0f32; 2 * (FRAME * 5 - 40)];
+        m.mix(&mut big, 2, 16_000, [0.0; 3], id, dg, sg);
+        let mut tail = vec![0.0f32; 64];
+        m.mix(&mut tail, 2, 16_000, [0.0; 3], id, dg, sg);
+        assert!((tail[0] - 8000.0 / 32768.0).abs() < 1e-3, "{}", tail[0]);
+        assert!(tail[62] > 0.0 && tail[62] < tail[0] * 0.5, "{}", tail[62]);
+    }
 
     #[test]
     fn adpcm_round_trips_a_tone() {

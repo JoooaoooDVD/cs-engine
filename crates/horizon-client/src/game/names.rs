@@ -209,6 +209,7 @@ impl Game<'_> {
                 discrete,
                 badge: player && self.cs_badge_for(&name),
                 bubble: if player { self.cs_bubble_view(&name) } else { None },
+                speaking: if player { self.cs_voice_speaking_view(&name) } else { None },
             });
         }
         // Armor stands name themselves: an invisible one with a visible name
@@ -270,6 +271,7 @@ impl Game<'_> {
                 discrete: false,
                 badge: false,
                 bubble: None,
+                speaking: None,
             });
         }
         // ItemFrameRenderer.shouldShowName/getNameTag: only the targeted
@@ -307,6 +309,7 @@ impl Game<'_> {
                     discrete: false,
                     badge: false,
                     bubble: None,
+                    speaking: None,
                 });
             }
         }
@@ -375,6 +378,26 @@ impl Game<'_> {
                 NAME_TAG_UNIT,
                 see_through,
             ));
+            // CS Engine voice chat: the speaker icon above the tag (above the
+            // bubble when there is one), popping in, its waves rippling.
+            if let Some((age, opacity)) = tag.speaking {
+                let alpha = (opacity * 255.0) as u32;
+                let bubble_h = tag.bubble.as_ref().map_or(0.0, |b| {
+                    if b.opacity() > 0.0 {
+                        f64::from(10.0 * NAME_TAG_UNIT * b.scale()) * b.lines.len() as f64 + 0.04
+                    } else {
+                        0.0
+                    }
+                });
+                let lift = tag.lines.last().map_or(0.0, |(_, l)| *l)
+                    + f64::from(9.0f32 * 1.15 * NAME_TAG_UNIT)
+                    + 0.08
+                    + bubble_h;
+                if alpha > 0 {
+                    self.mark_entity(out.len(), "minecraft:name_tag");
+                    self.cs_speaker_quads(o, lift, age, alpha, light, out);
+                }
+            }
             // CS Engine chat bubble: above the tag, popping in and fading out.
             if let Some(bubble) = &tag.bubble {
                 let alpha = (bubble.opacity() * 255.0) as u32;
@@ -527,6 +550,118 @@ impl Game<'_> {
     }
 }
 
+impl Game<'_> {
+    /// CS Engine voice chat: the speaker icon `lift` above `o`, centred,
+    /// facing the camera like a name tag. It pops in over the first quarter
+    /// second, bobs gently, and its sound waves ripple outward in turn.
+    fn cs_speaker_quads(
+        &self,
+        o: glam::DVec3,
+        lift: f64,
+        age: f32,
+        alpha: u32,
+        light: u32,
+        out: &mut Vec<Vertex>,
+    ) {
+        let (view_yaw, view_pitch) =
+            if self.camera_type == super::perspective::CameraType::ThirdPersonFront {
+                (self.yaw + 180.0, -self.pitch)
+            } else {
+                (self.yaw, self.pitch)
+            };
+        let forward = glam::DVec3::from_array(view_vector(view_yaw, view_pitch));
+        let right = forward.cross(glam::DVec3::Y).normalize_or_zero();
+        let up = right.cross(forward).normalize_or_zero();
+        // Pop in: a quick overshoot settling at 1 (like the chat bubble).
+        let p = (age / super::cs_bubbles::POP_SECS).clamp(0.0, 1.0);
+        let q = p - 1.0;
+        let pop = 0.35 + 0.65 * (1.0 + 2.70158 * q * q * q + 1.70158 * q * q);
+        let unit = NAME_TAG_UNIT * pop;
+        let bob = (age * 5.0).sin() * 0.4;
+        let o = (o + glam::DVec3::new(0.0, lift, 0.0)).as_vec3();
+        let (r, u) = (right.as_vec3() * unit, up.as_vec3() * unit);
+        let at = |x: f32, y: f32| o + r * x - u * y;
+        let mut batch = HudBatch::new([1, 1]);
+        cs_speaker_icon(&mut batch, &self.gui.atlas, -6.5, -11.0 + bob, alpha, age);
+        for quad in batch.vertices.as_chunks::<6>().0 {
+            for v in [quad[5], quad[2], quad[1], quad[0]] {
+                out.push(Vertex {
+                    normal: [0; 4],
+                    pos: at(v.pos[0], v.pos[1]).to_array(),
+                    uv: v.uv,
+                    layer: 0,
+                    color: v.color,
+                    light,
+                    glint_uv: [0.0, 0.0],
+                });
+            }
+        }
+    }
+}
+
+/// The speaker icon: a 13×11 dark tile with a pixel loudspeaker and three
+/// sound waves lit in turn (`age` seconds since the voice started), so the
+/// icon visibly "sounds" while the player talks.
+fn cs_speaker_icon(
+    batch: &mut HudBatch,
+    atlas: &horizon_client::hud::HudAtlas,
+    x: f32,
+    y: f32,
+    alpha: u32,
+    age: f32,
+) {
+    let tile = (alpha * 0xA8 / 255) << 24 | 0x10_1014;
+    let ink = alpha << 24 | 0xF2_F5FA;
+    let soft = (alpha * 0x60 / 255) << 24 | 0xF2_F5FA;
+    let wave_on = alpha << 24 | 0x55_FF55;
+    // A rounded tile.
+    batch.fill(atlas, x + 1.0, y, 11.0, 11.0, tile);
+    batch.fill(atlas, x, y + 1.0, 1.0, 9.0, tile);
+    batch.fill(atlas, x + 12.0, y + 1.0, 1.0, 9.0, tile);
+    // The loudspeaker: a box and a cone, in the tile's 11×9 inside.
+    let mut px = |cx: f32, cy: f32, c: u32| {
+        batch.fill(atlas, x + 1.0 + cx, y + 1.0 + cy, 1.0, 1.0, c);
+    };
+    for cy in 3..6 {
+        px(0.0, cy as f32, ink);
+        px(1.0, cy as f32, ink);
+    }
+    for cy in 2..7 {
+        px(2.0, cy as f32, ink);
+    }
+    for cy in 1..8 {
+        px(3.0, cy as f32, ink);
+    }
+    for cy in 0..9 {
+        px(4.0, cy as f32, ink);
+    }
+    // The waves ripple out: every 0.18 s one more lights, then all rest.
+    let phase = ((age / 0.18) as u32) % 4;
+    let wave = |n: u32| if phase >= n { wave_on } else { soft };
+    // Wave 1: a short arc.
+    for cy in 3..6 {
+        px(6.0, cy as f32, wave(1));
+    }
+    // Wave 2: a taller arc.
+    px(7.0, 1.0, wave(2));
+    px(8.0, 2.0, wave(2));
+    for cy in 3..6 {
+        px(8.0, cy as f32, wave(2));
+    }
+    px(8.0, 6.0, wave(2));
+    px(7.0, 7.0, wave(2));
+    // Wave 3: the outer arc.
+    px(9.0, 0.0, wave(3));
+    px(10.0, 1.0, wave(3));
+    px(10.0, 2.0, wave(3));
+    for cy in 3..6 {
+        px(10.0, cy as f32, wave(3));
+    }
+    px(10.0, 6.0, wave(3));
+    px(10.0, 7.0, wave(3));
+    px(9.0, 8.0, wave(3));
+}
+
 /// The CS badge: a light 9×9 tile with a pixel "CS" cut into it, its top left
 /// at (`x`, `y`) in the tag's text pixels. Drawn with the text's alpha.
 fn cs_badge(
@@ -598,6 +733,9 @@ struct NameTag {
     /// CS Engine: the CS badge before the name, and the chat bubble above it.
     badge: bool,
     bubble: Option<super::cs_bubbles::BubbleView>,
+    /// CS Engine voice chat: the player is speaking (seconds since they
+    /// started, opacity), for the animated speaker icon over the tag.
+    speaking: Option<(f32, f32)>,
 }
 
 #[cfg(test)]

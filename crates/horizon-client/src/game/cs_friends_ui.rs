@@ -173,6 +173,13 @@ impl Game<'_> {
             self.capture(false);
         }
     }
+    /// The voice menu (key V, `key.cs_voice_menu`): the Friends screen on
+    /// its Voice tab — groups to create, join or leave, players to mute.
+    pub(super) fn open_cs_voice_menu(&mut self) {
+        self.open_cs_friends();
+        self.cs_friends_ui.tab = screen::Tab::Voice;
+        self.cs_friends_ui.scroll = 0;
+    }
     /// Done / Escape: back to the pause menu, or the title.
     fn close_cs_friends(&mut self) {
         self.cs_friends_ui.focus = Focus::None;
@@ -238,6 +245,8 @@ impl Game<'_> {
                 talking: v.talking,
                 level: v.level,
                 players: self.cs_voice_players(),
+                group: self.cs_voice_my_group().map(str::to_owned),
+                groups: self.cs_voice_groups(),
             };
         }
         view.host = HostView {
@@ -423,6 +432,16 @@ impl Game<'_> {
                 self.cs_voice_save();
             }
             Action::VoiceMute(name) => self.cs_voice_toggle_mute(&name),
+            Action::VoiceGroupJoin(name) => {
+                let name = if name.is_empty() {
+                    std::mem::take(&mut self.cs_friends_ui.group_name)
+                } else {
+                    name
+                };
+                self.cs_friends_ui.focus = Focus::None;
+                self.cs_voice_group_join(&name);
+            }
+            Action::VoiceGroupLeave => self.cs_voice_group_leave(),
             Action::Players(step) => {
                 // 2, 4, 6, 8, 10, 12, 16, 20, 24, 32.
                 const STEPS: [usize; 10] = [2, 4, 6, 8, 10, 12, 16, 20, 24, 32];
@@ -542,14 +561,37 @@ impl Game<'_> {
     }
     /// A key (or typed text) while the screen is open.
     pub(super) fn cs_friends_key(&mut self, event: &KeyEvent) {
-        if event.state != ElementState::Pressed {
-            return;
-        }
         let key = match event.physical_key {
             PhysicalKey::Code(code) => Some(code),
             PhysicalKey::Unidentified(_) => None,
         };
-        if key == Some(KeyCode::Escape) {
+        // The voice keys work over this screen too (it is the voice menu):
+        // push to talk is held while no field has the focus, and the menu key
+        // closes the Voice tab it opened.
+        let bound = |mapping: &str| {
+            key.and_then(horizon_client::keybinds::key_name)
+                .is_some_and(|n| self.settings.keys.get(mapping) == n)
+        };
+        let (ptt, menu) = (bound("key.cs_voice"), bound("key.cs_voice_menu"));
+        if ptt {
+            if event.state == ElementState::Pressed && self.cs_friends_ui.focus == Focus::None {
+                self.keys.insert(super::cs_voice::PTT_KEY);
+            } else if event.state != ElementState::Pressed {
+                self.keys.remove(&super::cs_voice::PTT_KEY);
+            }
+            if self.cs_friends_ui.focus == Focus::None {
+                return;
+            }
+        }
+        if event.state != ElementState::Pressed {
+            return;
+        }
+        if key == Some(KeyCode::Escape)
+            || (menu
+                && !event.repeat
+                && self.cs_friends_ui.focus == Focus::None
+                && self.cs_friends_ui.tab == Tab::Voice)
+        {
             self.cs_friends_escape();
             return;
         }
@@ -585,6 +627,10 @@ impl Game<'_> {
                     Focus::Motd => {
                         let view = self.cs_view();
                         self.cs_friends_action(Action::SaveMotd, &view);
+                    }
+                    Focus::Group => {
+                        let view = self.cs_view();
+                        self.cs_friends_action(Action::VoiceGroupJoin(String::new()), &view);
                     }
                     Focus::None => {}
                 }

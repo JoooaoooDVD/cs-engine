@@ -14,10 +14,15 @@
 //! - A client that receives one feeds it to the mixer, where it plays from the
 //!   speaker's position: quieter with distance, panned left or right.
 //!
+//! - Groups: a player creates or joins a named group (the voice menu, key V).
+//!   Members hear each other from anywhere in the world — any distance, any
+//!   dimension, at full volume — while the players nearby still hear them as
+//!   before. The server keeps the groups and tells every client the roster.
+//!
 //! Settings live in `cs-voice.json` next to the CS Friends identity (shared
 //! by every profile).
 use super::{Game, Screen};
-use horizon_client::cs_voice::{self, FRAME, FRAME_BYTES, Mic};
+use horizon_client::cs_voice::{Encoder, FRAME, FRAME_BYTES, Mic, decode_frame};
 use horizon_client::{
     extras::Corner,
     extras_hud::Corners,
@@ -31,10 +36,28 @@ use winit::keyboard::KeyCode;
 pub const CHANNEL: &str = "cs:voice";
 /// Serverbound: `[1][seq u16][frame…]`.
 const TO_SERVER: u8 = 1;
-/// Clientbound: `[2][uuid 16][x f32][y f32][z f32][range u16][seq u16][frame…]`.
+/// Clientbound: `[2][uuid 16][x f32][y f32][z f32][range u16][seq u16][frame…]`;
+/// range 0 means a group voice (heard anywhere, full volume).
 const TO_CLIENT: u8 = 2;
-/// Speaking (push-to-talk) is this key's mapping, `key.cs_voice`, default V.
-pub const PTT_KEY: KeyCode = KeyCode::KeyV;
+/// Serverbound group request: `[3][op][name utf-8…]`, `op` 1 = create or
+/// join `name`, 2 = leave, 3 = send me the roster.
+const TO_SERVER_GROUP: u8 = 3;
+/// Clientbound roster: `[4][groups u8]{[len u8][name…][members u8]{uuid 16}…}…`.
+const TO_CLIENT_GROUPS: u8 = 4;
+const GROUP_JOIN: u8 = 1;
+const GROUP_LEAVE: u8 = 2;
+const GROUP_LIST: u8 = 3;
+/// A group name is at most this many characters.
+pub const GROUP_NAME_MAX: usize = 24;
+/// Speaking (push-to-talk) is this key's mapping, `key.cs_voice`, default B
+/// (V opens the voice menu, `key.cs_voice_menu`).
+pub const PTT_KEY: KeyCode = KeyCode::KeyB;
+/// The voice menu (groups, mute) is this key's mapping, `key.cs_voice_menu`.
+pub const MENU_KEY: KeyCode = KeyCode::KeyV;
+/// A speaker's icon over their name tag lingers this long after their last
+/// frame, fading, so it doesn't flicker between words.
+const ICON_LINGER: Duration = Duration::from_millis(450);
+const ICON_FADE: Duration = Duration::from_millis(200);
 /// Open-mic mode sends while the frame's peak is above this (0 to 1).
 const OPEN_MIC_THRESHOLD: f32 = 0.04;
 /// …and for this long after it last was (so words don't clip).
@@ -111,6 +134,19 @@ pub struct CsVoice {
     pub level: f32,
     /// Who is heard, by uuid, and when last (for the HUD and the Voice tab).
     pub heard: HashMap<u128, Instant>,
+    /// Who is speaking right now, by uuid: when they started and when their
+    /// last frame played (the icon over their name tag).
+    speaking: HashMap<u128, (Instant, Instant)>,
+    /// The frames' encoder, carrying its state while the player talks.
+    encoder: Encoder,
+    /// The groups in this world, as the server last told them: name, members.
+    pub groups: Vec<(String, Vec<u128>)>,
+    /// The group the player asked for (joined again on the next world).
+    pub wanted_group: Option<String>,
+    /// The roster was asked for (and the wanted group joined) on this connection.
+    synced: bool,
+    /// Server side: the groups, name to members.
+    srv_groups: Vec<(String, Vec<u128>)>,
     /// Server side: frames relayed this session (a diagnostic).
     pub relayed: u64,
     /// Server side: when the settings file was last read (the host's range).
@@ -130,6 +166,12 @@ impl Default for CsVoice {
             last_loud: None,
             level: 0.0,
             heard: HashMap::new(),
+            speaking: HashMap::new(),
+            encoder: Encoder::default(),
+            groups: Vec::new(),
+            wanted_group: None,
+            synced: false,
+            srv_groups: Vec::new(),
             relayed: 0,
             reloaded: None,
         }
@@ -153,7 +195,7 @@ fn parse_to_client(data: &[u8]) -> Option<Incoming> {
     let range = f32::from(u16::from_be_bytes([data[29], data[30]]));
     let frames = data[33..]
         .chunks(FRAME_BYTES)
-        .filter_map(cs_voice::decode_frame)
+        .filter_map(decode_frame)
         .collect();
     Some(Incoming {
         who,
@@ -161,6 +203,56 @@ fn parse_to_client(data: &[u8]) -> Option<Incoming> {
         range,
         frames,
     })
+}
+
+/// The roster as the clients receive it.
+fn encode_roster(groups: &[(String, Vec<u128>)]) -> Vec<u8> {
+    let mut out = vec![TO_CLIENT_GROUPS, groups.len().min(255) as u8];
+    for (name, members) in groups.iter().take(255) {
+        let name = name.as_bytes();
+        let n = name.len().min(255);
+        out.push(n as u8);
+        out.extend_from_slice(&name[..n]);
+        out.push(members.len().min(255) as u8);
+        for m in members.iter().take(255) {
+            out.extend_from_slice(&m.to_be_bytes());
+        }
+    }
+    out
+}
+fn parse_roster(data: &[u8]) -> Option<Vec<(String, Vec<u128>)>> {
+    if data.len() < 2 || data[0] != TO_CLIENT_GROUPS {
+        return None;
+    }
+    let mut groups = Vec::new();
+    let mut i = 2;
+    for _ in 0..data[1] {
+        let n = *data.get(i)? as usize;
+        let name = String::from_utf8_lossy(data.get(i + 1..i + 1 + n)?).into_owned();
+        i += 1 + n;
+        let m = *data.get(i)? as usize;
+        i += 1;
+        let mut members = Vec::with_capacity(m);
+        for _ in 0..m {
+            members.push(u128::from_be_bytes(data.get(i..i + 16)?.try_into().ok()?));
+            i += 16;
+        }
+        groups.push((name, members));
+    }
+    Some(groups)
+}
+/// A group name as typed, cleaned: trimmed, one space between words, at
+/// most [`GROUP_NAME_MAX`] characters; `None` when nothing is left.
+pub fn clean_group_name(name: &str) -> Option<String> {
+    let name: String = name
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(GROUP_NAME_MAX)
+        .collect();
+    (!name.is_empty()).then_some(name)
 }
 
 impl Game<'_> {
@@ -212,14 +304,22 @@ impl Game<'_> {
     /// and who is heard.
     pub(super) fn cs_voice_frame(&mut self) {
         self.cs_voice_load();
-        // Who is heard right now, for the HUD.
+        // Who is heard right now, for the HUD and the icons over name tags.
         let now = Instant::now();
         for id in self.audio.voice_speaking() {
             self.cs_voice.heard.insert(id, now);
+            self.cs_voice
+                .speaking
+                .entry(id)
+                .and_modify(|(_, last)| *last = now)
+                .or_insert((now, now));
         }
         self.cs_voice
             .heard
             .retain(|_, t| now.duration_since(*t) < Duration::from_secs(2));
+        self.cs_voice
+            .speaking
+            .retain(|_, (_, last)| now.duration_since(*last) < ICON_LINGER);
         if !self.cs_voice.settings.enabled || !self.cs_voice_available() {
             if self.cs_voice.mic.is_some() {
                 self.cs_voice.mic = None;
@@ -227,11 +327,23 @@ impl Game<'_> {
             }
             self.cs_voice.talking = false;
             self.cs_voice.level = 0.0;
+            self.cs_voice.synced = false;
             if self.title.is_some() {
                 self.audio.voice_clear();
                 self.cs_voice.heard.clear();
+                self.cs_voice.speaking.clear();
+                self.cs_voice.groups.clear();
             }
             return;
+        }
+        // Once a connection: the roster, and the group asked for last time.
+        if !self.cs_voice.synced {
+            self.cs_voice.synced = true;
+            self.cs_voice.groups.clear();
+            match self.cs_voice.wanted_group.clone() {
+                Some(name) => self.cs_voice_group_send(GROUP_JOIN, &name),
+                None => self.cs_voice_group_send(GROUP_LIST, ""),
+            }
         }
         // The microphone, opened when needed; without permission it fails,
         // so the host is asked for it once, and the open is tried again.
@@ -277,6 +389,7 @@ impl Game<'_> {
             // Not talking: drop what was captured, keep the tail short.
             self.cs_voice.pending.clear();
             self.cs_voice.talking = false;
+            self.cs_voice.encoder.reset();
             return;
         }
         self.cs_voice.talking = true;
@@ -294,7 +407,7 @@ impl Game<'_> {
                 payload.extend_from_slice(&self.cs_voice.seq.to_be_bytes());
                 self.cs_voice.seq = self.cs_voice.seq.wrapping_add(1);
             }
-            payload.extend_from_slice(&cs_voice::encode_frame(&frame));
+            payload.extend_from_slice(&self.cs_voice.encoder.encode(&frame));
             frames += 1;
             if frames >= 5 {
                 self.cs_voice.pending.clear();
@@ -308,11 +421,93 @@ impl Game<'_> {
         }
     }
 
-    /// Server side: a client's frames, relayed to everyone else who can hear.
+    /// Server side: the roster, to one player or to every CS client.
+    fn cs_voice_send_roster(&mut self, to: Option<u128>) {
+        let payload = encode_roster(&self.cs_voice.srv_groups);
+        let targets: Vec<u128> = match (to, self.lan.as_ref()) {
+            (Some(uuid), _) => vec![uuid],
+            (None, Some(host)) => host
+                .hub
+                .guests
+                .iter()
+                .filter(|g| g.brand == "horizon")
+                .map(|g| g.uuid)
+                .collect(),
+            (None, None) => Vec::new(),
+        };
+        for uuid in targets {
+            let _ = self.native_net_send_to_player(uuid, CHANNEL, &payload);
+        }
+    }
+    /// Server side: members who left the world leave their groups; empty
+    /// groups go. `true` when something changed.
+    fn cs_voice_prune_groups(&mut self) -> bool {
+        let present: Vec<u128> = self
+            .lan
+            .as_ref()
+            .map(|h| h.hub.guests.iter().map(|g| g.uuid).collect())
+            .unwrap_or_default();
+        let before: usize = self.cs_voice.srv_groups.iter().map(|(_, m)| m.len()).sum();
+        for (_, members) in &mut self.cs_voice.srv_groups {
+            members.retain(|u| present.contains(u));
+        }
+        self.cs_voice.srv_groups.retain(|(_, m)| !m.is_empty());
+        let after: usize = self.cs_voice.srv_groups.iter().map(|(_, m)| m.len()).sum();
+        before != after
+    }
+    /// Server side: a client's group request.
+    fn cs_voice_group_request(&mut self, player: u128, op: u8, name: &str) {
+        let changed = self.cs_voice_prune_groups();
+        match op {
+            GROUP_JOIN => {
+                let Some(name) = clean_group_name(name) else {
+                    return;
+                };
+                for (_, members) in &mut self.cs_voice.srv_groups {
+                    members.retain(|u| *u != player);
+                }
+                self.cs_voice.srv_groups.retain(|(_, m)| !m.is_empty());
+                match self
+                    .cs_voice
+                    .srv_groups
+                    .iter_mut()
+                    .find(|(n, _)| n.eq_ignore_ascii_case(&name))
+                {
+                    Some((_, members)) => members.push(player),
+                    None => self.cs_voice.srv_groups.push((name, vec![player])),
+                }
+                self.cs_voice_send_roster(None);
+            }
+            GROUP_LEAVE => {
+                for (_, members) in &mut self.cs_voice.srv_groups {
+                    members.retain(|u| *u != player);
+                }
+                self.cs_voice.srv_groups.retain(|(_, m)| !m.is_empty());
+                self.cs_voice_send_roster(None);
+            }
+            GROUP_LIST => {
+                if changed {
+                    self.cs_voice_send_roster(None);
+                } else {
+                    self.cs_voice_send_roster(Some(player));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Server side: a client's frames, relayed to everyone else who can hear:
+    /// the speaker's group members anywhere (as a group voice), and the
+    /// players within range (as a proximity voice).
     /// `true` when the message was voice (and is not for the mods).
     pub(super) fn cs_voice_from_client(&mut self, player: u128, channel: &str, data: &[u8]) -> bool {
         if channel != CHANNEL {
             return false;
+        }
+        if data.len() >= 2 && data[0] == TO_SERVER_GROUP {
+            let name = String::from_utf8_lossy(&data[2..]).into_owned();
+            self.cs_voice_group_request(player, data[1], &name);
+            return true;
         }
         if data.len() < 3 + FRAME_BYTES || data[0] != TO_SERVER {
             return true;
@@ -342,37 +537,61 @@ impl Game<'_> {
         ];
         let dimension = speaker.dimension.clone();
         let range = self.cs_voice.settings.range.clamp(8, 256);
-        let mut payload = Vec::with_capacity(33 + frames.len());
-        payload.push(TO_CLIENT);
-        payload.extend_from_slice(&player.to_be_bytes());
-        for c in at {
-            payload.extend_from_slice(&c.to_be_bytes());
-        }
-        payload.extend_from_slice(&(range as u16).to_be_bytes());
-        payload.extend_from_slice(&seq);
-        payload.extend_from_slice(frames);
-        let reach = f64::from(range) + 8.0;
-        let hearers: Vec<u128> = host
-            .hub
-            .guests
+        let payload_for = |range: u16| {
+            let mut payload = Vec::with_capacity(33 + frames.len());
+            payload.push(TO_CLIENT);
+            payload.extend_from_slice(&player.to_be_bytes());
+            for c in at {
+                payload.extend_from_slice(&c.to_be_bytes());
+            }
+            payload.extend_from_slice(&range.to_be_bytes());
+            payload.extend_from_slice(&seq);
+            payload.extend_from_slice(frames);
+            payload
+        };
+        let members: Vec<u128> = self
+            .cs_voice
+            .srv_groups
             .iter()
-            .filter(|g| {
-                g.placed
-                    && g.uuid != player
-                    && g.brand == "horizon"
-                    && g.dimension == dimension
-                    && {
-                        let d: f64 = (0..3)
-                            .map(|i| (g.position[i] - speaker.position[i]).powi(2))
-                            .sum();
-                        d <= reach * reach
-                    }
-            })
-            .map(|g| g.uuid)
-            .collect();
-        for uuid in hearers {
-            if self.native_net_send_to_player(uuid, CHANNEL, &payload).is_ok() {
-                self.cs_voice.relayed += 1;
+            .find(|(_, m)| m.contains(&player))
+            .map(|(_, m)| m.clone())
+            .unwrap_or_default();
+        let reach = f64::from(range) + 8.0;
+        let mut group_hearers = Vec::new();
+        let mut near_hearers = Vec::new();
+        for g in &host.hub.guests {
+            if !g.placed || g.uuid == player || g.brand != "horizon" {
+                continue;
+            }
+            if members.contains(&g.uuid) {
+                group_hearers.push(g.uuid);
+                continue;
+            }
+            if g.dimension != dimension {
+                continue;
+            }
+            let d: f64 = (0..3)
+                .map(|i| (g.position[i] - speaker.position[i]).powi(2))
+                .sum();
+            if d <= reach * reach {
+                near_hearers.push(g.uuid);
+            }
+        }
+        if !group_hearers.is_empty() {
+            // Range 0: a group voice (`cs_voice::GROUP_RANGE`).
+            let payload = payload_for(0);
+            for uuid in group_hearers {
+                if self.native_net_send_to_player(uuid, CHANNEL, &payload).is_ok() {
+                    self.cs_voice.relayed += 1;
+                }
+            }
+        }
+        if !near_hearers.is_empty() {
+            let payload = payload_for(range as u16);
+            for uuid in near_hearers {
+                if self.native_net_send_to_player(uuid, CHANNEL, &payload).is_ok() {
+                    self.cs_voice.relayed += 1;
+                }
             }
         }
         true
@@ -385,6 +604,10 @@ impl Game<'_> {
             return false;
         }
         self.cs_voice_load();
+        if let Some(groups) = parse_roster(data) {
+            self.cs_voice.groups = groups;
+            return true;
+        }
         if !self.cs_voice.settings.enabled {
             return true;
         }
@@ -408,6 +631,87 @@ impl Game<'_> {
         }
         self.cs_voice.heard.insert(in_.who, Instant::now());
         true
+    }
+
+    /// Client side: a group request to the server.
+    fn cs_voice_group_send(&mut self, op: u8, name: &str) {
+        let mut payload = vec![TO_SERVER_GROUP, op];
+        payload.extend_from_slice(name.as_bytes());
+        if let Err(e) = self.native_net_send_to_server(CHANNEL, &payload) {
+            log::debug!("CS voice: group request not sent: {e}");
+        }
+    }
+    /// Create or join the group `name` (the voice menu).
+    pub(super) fn cs_voice_group_join(&mut self, name: &str) {
+        let Some(name) = clean_group_name(name) else {
+            return;
+        };
+        self.cs_voice.wanted_group = Some(name.clone());
+        if self.cs_voice_available() {
+            self.cs_voice_group_send(GROUP_JOIN, &name);
+        }
+    }
+    /// Leave the group the player is in.
+    pub(super) fn cs_voice_group_leave(&mut self) {
+        self.cs_voice.wanted_group = None;
+        if self.cs_voice_available() {
+            self.cs_voice_group_send(GROUP_LEAVE, "");
+        }
+    }
+    /// The group the player is in, as the server has it.
+    pub(super) fn cs_voice_my_group(&self) -> Option<&str> {
+        let own = self.remote.as_ref()?.profile();
+        self.cs_voice
+            .groups
+            .iter()
+            .find(|(_, m)| m.contains(&own))
+            .map(|(n, _)| n.as_str())
+    }
+    /// The groups for the voice menu: name, members' names (the player
+    /// marked), whether it is the player's.
+    pub(super) fn cs_voice_groups(&self) -> Vec<(String, Vec<String>, bool)> {
+        let Some(r) = self.remote.as_ref() else {
+            return Vec::new();
+        };
+        let own = r.profile();
+        self.cs_voice
+            .groups
+            .iter()
+            .map(|(name, members)| {
+                let names: Vec<String> = members
+                    .iter()
+                    .filter_map(|u| {
+                        if *u == own {
+                            Some("You".to_owned())
+                        } else {
+                            r.players.get(u).cloned()
+                        }
+                    })
+                    .collect();
+                (name.clone(), names, members.contains(&own))
+            })
+            .collect()
+    }
+    /// The speaking icon over `name`'s tag: how long they have been speaking
+    /// and its opacity (fading after their last frame), or `None`.
+    pub(super) fn cs_voice_speaking_view(&self, name: &str) -> Option<(f32, f32)> {
+        if self.cs_voice.speaking.is_empty() {
+            return None;
+        }
+        let r = self.remote.as_ref()?;
+        let (uuid, _) = r
+            .players
+            .iter()
+            .find(|(_, n)| n.eq_ignore_ascii_case(name))?;
+        let (since, last) = self.cs_voice.speaking.get(uuid)?;
+        let quiet = last.elapsed();
+        let opacity = if quiet <= ICON_LINGER - ICON_FADE {
+            1.0
+        } else {
+            ((ICON_LINGER.saturating_sub(quiet)).as_secs_f32() / ICON_FADE.as_secs_f32())
+                .clamp(0.0, 1.0)
+        };
+        Some((since.elapsed().as_secs_f32(), opacity))
     }
 
     /// The players in the world (other than us) for the Voice tab: name,
@@ -450,6 +754,9 @@ impl Game<'_> {
             return;
         }
         let mut lines: Vec<(String, u32)> = Vec::new();
+        if let Some(group) = self.cs_voice_my_group() {
+            lines.push((format!("Group: {group}"), 0xFFC6_C6CE));
+        }
         if self.cs_voice.talking {
             let bars = (self.cs_voice.level * 6.0).round() as usize;
             lines.push((format!("● You {}", "|".repeat(bars.min(6))), 0xFF55_FF55));
@@ -483,5 +790,47 @@ impl Game<'_> {
         for (i, (t, color)) in lines.iter().enumerate() {
             batch.text(atlas, t, x0 + 4.0, y0 + 2.0 + i as f32 * 10.0, *color, true);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_roster_round_trips_and_group_names_are_cleaned() {
+        let groups = vec![
+            ("Raid team".to_owned(), vec![1u128, 2, 3]),
+            ("Ünïcode ✓".to_owned(), vec![u128::MAX]),
+            ("empty".to_owned(), Vec::new()),
+        ];
+        let bytes = encode_roster(&groups);
+        assert_eq!(bytes[0], TO_CLIENT_GROUPS);
+        assert_eq!(parse_roster(&bytes).expect("a roster"), groups);
+        assert!(parse_roster(&bytes[..bytes.len() - 1]).is_none(), "truncated");
+        assert!(parse_roster(&[TO_CLIENT, 0]).is_none(), "not a roster");
+        assert_eq!(parse_roster(&[TO_CLIENT_GROUPS, 0]), Some(Vec::new()));
+        assert_eq!(clean_group_name("  my   squad \n"), Some("my squad".to_owned()));
+        assert_eq!(clean_group_name(" \t "), None);
+        assert_eq!(
+            clean_group_name(&"x".repeat(50)).map(|n| n.chars().count()),
+            Some(GROUP_NAME_MAX)
+        );
+    }
+
+    #[test]
+    fn a_group_voice_arrives_with_range_zero() {
+        let mut data = vec![TO_CLIENT];
+        data.extend_from_slice(&7u128.to_be_bytes());
+        for c in [1.0f32, 2.0, 3.0] {
+            data.extend_from_slice(&c.to_be_bytes());
+        }
+        data.extend_from_slice(&0u16.to_be_bytes());
+        data.extend_from_slice(&[0, 1]);
+        data.extend_from_slice(&[0u8; FRAME_BYTES]);
+        let in_ = parse_to_client(&data).expect("a voice payload");
+        assert_eq!(in_.who, 7);
+        assert_eq!(in_.range, 0.0);
+        assert_eq!(in_.frames.len(), 1);
     }
 }

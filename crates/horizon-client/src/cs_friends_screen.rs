@@ -49,6 +49,8 @@ pub enum Focus {
     AddCode,
     Chat,
     Motd,
+    /// The voice menu's group name.
+    Group,
 }
 
 /// The screen's own state (what the player typed and where they are).
@@ -62,6 +64,8 @@ pub struct Ui {
     pub chat_with: Option<String>,
     pub chat_text: String,
     pub motd: String,
+    /// The voice menu: a group name typed to create or join.
+    pub group_name: String,
     pub focus: Focus,
     /// 0 = CS Launcher icon, 1 = the world's icon, 2 = a custom file.
     pub icon: usize,
@@ -77,6 +81,7 @@ impl Ui {
             Focus::AddCode => Some(&mut self.add_code),
             Focus::Chat => Some(&mut self.chat_text),
             Focus::Motd => Some(&mut self.motd),
+            Focus::Group => Some(&mut self.group_name),
         }
     }
     pub fn field(&self) -> Option<&String> {
@@ -85,6 +90,7 @@ impl Ui {
             Focus::AddCode => Some(&self.add_code),
             Focus::Chat => Some(&self.chat_text),
             Focus::Motd => Some(&self.motd),
+            Focus::Group => Some(&self.group_name),
         }
     }
     pub fn max_len(&self) -> usize {
@@ -92,6 +98,7 @@ impl Ui {
             Focus::AddCode => 12,
             Focus::Chat => 256,
             Focus::Motd => 59,
+            Focus::Group => 24,
             Focus::None => 0,
         }
     }
@@ -129,6 +136,10 @@ pub struct VoiceView {
     pub level: f32,
     /// Players in the world: name, muted, heard right now.
     pub players: Vec<(String, bool, bool)>,
+    /// The group the player is in.
+    pub group: Option<String>,
+    /// The world's groups: name, members' names, the player's own.
+    pub groups: Vec<(String, Vec<String>, bool)>,
 }
 
 /// What the screen shows (the game fills it from `cs_friends::State`).
@@ -196,6 +207,9 @@ pub enum Action {
     VoiceMic(i32),
     VoiceRange(i32),
     VoiceMute(String),
+    /// Create or join the group typed (empty: the named one), leave the group.
+    VoiceGroupJoin(String),
+    VoiceGroupLeave,
     Done,
 }
 
@@ -744,7 +758,7 @@ fn layout(atlas: &HudAtlas, (w, h): (f32, f32), ui: &Ui, view: &View) -> Layout 
                     let bars = (vv.level * 10.0).round() as usize;
                     add(&mut lines, &format!("Transmitting  {}{}", "|".repeat(bars.min(10)), "·".repeat(10 - bars.min(10))), green(), &mut y);
                 } else if vv.ptt {
-                    add(&mut lines, "Ready. Hold the Push to Talk key (V, or the CS control button bound to it in Key Binds).", WHITE, &mut y);
+                    add(&mut lines, "Ready. Hold the Push to Talk key (B, or the CS control button bound to it in Key Binds). V opens this menu.", WHITE, &mut y);
                 } else {
                     add(&mut lines, "Ready. Open mic: sends when you speak.", WHITE, &mut y);
                 }
@@ -764,29 +778,82 @@ fn layout(atlas: &HudAtlas, (w, h): (f32, f32), ui: &Ui, view: &View) -> Layout 
                 y += 22.0;
                 row(&mut lines, &mut buttons, y, format!("Range (your worlds): {} blocks", vv.range), Action::VoiceRange(-1), Action::VoiceRange(1), vv.range > 8, vv.range < 256);
                 y += 24.0;
-                // Players.
+                // Groups: members hear each other from anywhere.
+                if vv.in_world && vv.available {
+                    match &vv.group {
+                        Some(g) => {
+                            lines.push((fit(atlas, &format!("Your group: {g}"), width - 64.0), green(), left, y + 6.0));
+                            buttons.push(Button { x: right - 60.0, y, w: 60.0, label: "Leave".to_owned(), action: Action::VoiceGroupLeave, active: true });
+                            y += 22.0;
+                            add(&mut lines, "Group members hear each other anywhere in the world, at full volume. Players near you still hear you too.", grey(), &mut y);
+                        }
+                        None => {
+                            lines.push(("Create or join a group (members hear each other anywhere)".to_owned(), grey(), left, y));
+                            y += 11.0;
+                            fields.push(Field {
+                                x: left,
+                                y,
+                                w: width - 64.0,
+                                focus: Focus::Group,
+                                value: ui.group_name.clone(),
+                                placeholder: "Group name",
+                                focused: ui.focus == Focus::Group,
+                            });
+                            buttons.push(Button {
+                                x: right - 60.0,
+                                y,
+                                w: 60.0,
+                                label: "Join".to_owned(),
+                                action: Action::VoiceGroupJoin(String::new()),
+                                active: !ui.group_name.trim().is_empty(),
+                            });
+                            y += 24.0;
+                        }
+                    }
+                    y += 2.0;
+                }
+                // Groups and players, one scrolled list: groups first (join
+                // another from here), then everyone in the world (mute).
                 let list_top = y;
                 let fit_rows = ((bottom - list_top) / ROW).floor().max(1.0) as i32;
-                let total = vv.players.len() as i32;
+                let mut rows: Vec<(String, u32, String, Action, bool)> = Vec::new();
+                for (name, members, mine) in &vv.groups {
+                    let who = if members.is_empty() { String::new() } else { format!("  ({})", members.join(", ")) };
+                    rows.push((
+                        format!("[Group] {name}{who}"),
+                        if *mine { green() } else { WHITE },
+                        if *mine { "Leave" } else { "Join" }.to_owned(),
+                        if *mine { Action::VoiceGroupLeave } else { Action::VoiceGroupJoin(name.clone()) },
+                        false,
+                    ));
+                }
+                for (name, muted, heard) in &vv.players {
+                    rows.push((
+                        name.clone(),
+                        if *heard { green() } else if *muted { red() } else { WHITE },
+                        if *muted { "Unmute" } else { "Mute" }.to_owned(),
+                        Action::VoiceMute(name.clone()),
+                        true,
+                    ));
+                }
+                let total = rows.len() as i32;
                 let scroll = ui.scroll.clamp(0, (total - fit_rows).max(0));
                 if total > fit_rows {
                     overflow = Some((total, fit_rows));
                 }
-                if vv.players.is_empty() && vv.in_world {
+                if rows.is_empty() && vv.in_world {
                     lines.push(("Nobody else in the world yet.".to_owned(), dim(), left, y + 4.0));
                 }
-                for (i, (name, muted, heard)) in vv.players.iter().enumerate().skip(scroll as usize).take(fit_rows as usize) {
+                for (i, (text, color, label, action, dot)) in rows.into_iter().enumerate().skip(scroll as usize).take(fit_rows as usize) {
                     let y = list_top + (i as i32 - scroll) as f32 * ROW;
-                    lines.push(("●".to_owned(), if *heard { green() } else if *muted { red() } else { dim() }, left, y + 6.0));
-                    lines.push((fit(atlas, name, width - 90.0), WHITE, left + 10.0, y + 6.0));
-                    buttons.push(Button {
-                        x: right - 60.0,
-                        y,
-                        w: 60.0,
-                        label: if *muted { "Unmute" } else { "Mute" }.to_owned(),
-                        action: Action::VoiceMute(name.clone()),
-                        active: true,
-                    });
+                    let x = if dot {
+                        lines.push(("●".to_owned(), if color == WHITE { dim() } else { color }, left, y + 6.0));
+                        left + 10.0
+                    } else {
+                        left
+                    };
+                    lines.push((fit(atlas, &text, width - 90.0), color, x, y + 6.0));
+                    buttons.push(Button { x: right - 60.0, y, w: 60.0, label, action, active: true });
                 }
             }
         }

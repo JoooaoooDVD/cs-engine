@@ -14538,6 +14538,8 @@ impl Game<'_> {
                 && self.search_tab_hotbar_key(key) => {}
             KeyCode::KeyT if self.screen == Screen::Inventory => self.recipe_focus_search(),
             KeyCode::KeyT if self.screen == Screen::Playing => self.open_chat_method(""),
+            // key.cs_voice_menu (CS Engine voice chat: groups, mute).
+            cs_voice::MENU_KEY if self.screen == Screen::Playing => self.open_cs_voice_menu(),
             // key.advancements.
             KeyCode::KeyL if self.screen == Screen::Playing => self.open_advancements(false),
             KeyCode::KeyL if self.screen == Screen::Advancements => self.close_advancements(),
