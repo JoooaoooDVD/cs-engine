@@ -128,7 +128,7 @@ pub extern "system" fn Java_com_craftstudio_cslauncher_e4mc_E4mcNative_nativeSet
     let Some(publish) = publish(handle) else {
         return;
     };
-    let text = |s: &JString| -> Option<String> {
+    let mut text = |s: &JString| -> Option<String> {
         if s.is_null() {
             None
         } else {

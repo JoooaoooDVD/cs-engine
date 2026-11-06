@@ -341,6 +341,16 @@ fn take_packet(buf: &[u8], pos: &mut usize) -> Option<(i32, Vec<u8>)> {
 /// Parse what `buf` holds so far: None while more bytes are needed.
 fn parse_opening(buf: &[u8]) -> Option<Opening> {
     let mut pos = 0;
+    // Before the whole handshake is in: a first packet that is not id 0 is
+    // not a Minecraft client (an HTTP probe, say), no need to wait for it.
+    {
+        let mut p = 0;
+        match read_varint(buf, &mut p) {
+            Some(len) if len <= 0 => return Some(Opening::Other),
+            Some(_) if buf.get(p).is_some_and(|&id| id != 0) => return Some(Opening::Other),
+            _ => {}
+        }
+    }
     let (id, body) = take_packet(buf, &mut pos)?;
     if id != 0 {
         return Some(Opening::Other);
