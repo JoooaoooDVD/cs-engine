@@ -798,5 +798,8 @@ pub extern "system" fn Java_com_craftstudio_cslauncher_engine_horizon_HorizonNat
     if horizon_client::android_runtime::host_mic_wanted() {
         flags |= 16;
     }
+    if horizon_client::android_runtime::host_text_field() {
+        flags |= 32;
+    }
     flags
 }

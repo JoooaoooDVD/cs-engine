@@ -45,6 +45,13 @@ impl Game<'_> {
         // NativeActivity's separate winit IME calls must not steal that focus.
         #[cfg(target_os = "android")]
         let want = crate::platform::active();
+        #[cfg(target_os = "android")]
+        {
+            // The host launcher (CS Launcher Plus) types hardware-keyboard characters into
+            // the focused field only while one exists, soft keyboard open or not.
+            let focused = self.text_field_focused();
+            horizon_client::android_runtime::host_set_text_field(focused);
+        }
         #[cfg(not(target_os = "android"))]
         let want = self.text_field_focused();
         if want != self.ime_allowed

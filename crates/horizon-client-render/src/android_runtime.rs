@@ -234,6 +234,7 @@ pub enum HostEvent {
 static HOST_MODE: AtomicBool = AtomicBool::new(false);
 static HOST_GRAB: AtomicBool = AtomicBool::new(false);
 static HOST_KEYBOARD: AtomicBool = AtomicBool::new(false);
+static HOST_TEXT_FIELD: AtomicBool = AtomicBool::new(false);
 static HOST_EVENTS: std::sync::Mutex<Vec<(std::time::Instant, HostEvent)>> =
     std::sync::Mutex::new(Vec::new());
 /// A click older than this when the game gets to it was meant for a screen that is gone
@@ -450,4 +451,13 @@ pub fn host_set_keyboard(wanted: bool) {
 }
 pub fn host_keyboard() -> bool {
     HOST_KEYBOARD.load(Ordering::Relaxed)
+}
+/// A text field has the focus (server address, world name, chat, sign...), whether or not
+/// the on-screen keyboard was asked for: the host forwards hardware-keyboard characters as
+/// text while this is set, so a physical keyboard types without opening the soft keyboard.
+pub fn host_set_text_field(focused: bool) {
+    HOST_TEXT_FIELD.store(focused, Ordering::Relaxed);
+}
+pub fn host_text_field() -> bool {
+    HOST_TEXT_FIELD.load(Ordering::Relaxed)
 }
