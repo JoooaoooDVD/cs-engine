@@ -32,7 +32,12 @@ def main():
     for id_ in ids:
         p = projects.get(id_)
         if p is None or p["kind"] != "native-mod":
-            sys.exit(f"cs_native_mods: {id_}: not a native mod in the registry")
+            # The registry retired it or republished it as a runtime mod (.hmod, installed
+            # from the launcher's Mods browser instead): nothing to compile in.
+            what = "not in the registry" if p is None else f"published as a {p['kind']} now, not a native mod"
+            print(f"cs_native_mods: {id_}: skipped, {what}")
+            skipped.append({"id": id_, "reason": what})
+            continue
         if id_ in revoked:
             sys.exit(f"cs_native_mods: {id_}: revoked")
         v = p["versions"][0]

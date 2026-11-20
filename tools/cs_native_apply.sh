@@ -18,6 +18,11 @@ if [ ! -x "$BIN" ] || [ "$(cat "$HOME/.cargo/.horizon-mixins-rev" 2>/dev/null)" 
   echo "$MIXINS_REV" > "$HOME/.cargo/.horizon-mixins-rev"
 fi
 python3 tools/cs_native_mods.py "$MODS"
+if [ -z "$(find "$MODS" -mindepth 1 -maxdepth 1 -type d ! -name '.*' 2>/dev/null)" ]; then
+  echo "cs_native_apply: no native mod bundles to compile in (all skipped)"
+  cp "$(dirname "$MODS")/cs-native-mods.json" cs-native-mods.json
+  exit 0
+fi
 # The tool snapshots the whole tree and refuses symlinks; the repo keeps one convenience link.
 find . -path ./.git -prune -o -type l -print | while read -r l; do rm -f "$l"; done
 git rev-parse HEAD > .horizon-revision
