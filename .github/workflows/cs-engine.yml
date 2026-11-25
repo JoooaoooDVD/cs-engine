@@ -63,6 +63,8 @@ jobs:
             ~/.cargo/.horizon-mixins-rev
           key: horizon-mixins-4342a0bfbe71d4d14185528d64e496d6022f16a1
       - name: Compile native mods in (horizon-mixins)
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: bash tools/cs_native_apply.sh
       - name: cargo check (cs-host)
         run: python3 tools/android_build.py --abi arm64-v8a --check --public --cs-host --sdk "$ANDROID_HOME" --java-home "$JAVA_HOME_17_X64"
@@ -133,6 +135,8 @@ jobs:
           key: horizon-mixins-4342a0bfbe71d4d14185528d64e496d6022f16a1
       - name: Compile native mods in (horizon-mixins)
         if: steps.want.outputs.build == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: bash tools/cs_native_apply.sh
       - name: Build libcs_engine.so (cs-host)
         if: steps.want.outputs.build == '1'

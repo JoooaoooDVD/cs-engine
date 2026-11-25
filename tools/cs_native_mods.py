@@ -24,9 +24,12 @@ def missing_registry_fallback(ids, out):
         r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo
     ):
         return False
+    headers = {"User-Agent": "cs-engine-ci", "Accept": "application/vnd.github+json"}
+    if token := os.environ.get("GH_TOKEN"):
+        headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(
         f"https://api.github.com/repos/{repo}/releases/tags/cs-engine-latest",
-        headers={"User-Agent": "cs-engine-ci", "Accept": "application/vnd.github+json"},
+        headers=headers,
     )
     try:
         with urllib.request.urlopen(request, timeout=60) as response:
@@ -40,7 +43,9 @@ def missing_registry_fallback(ids, out):
             previous = json.load(response)
         if previous.get("built") != [] or not isinstance(previous.get("skipped"), list):
             return False
-    except (OSError, ValueError, KeyError, StopIteration, TypeError):
+    except (OSError, ValueError, KeyError, StopIteration, TypeError) as error:
+        print(f"cs_native_mods: cannot verify previous release ({type(error).__name__}, "
+              f"HTTP {getattr(error, 'code', 'n/a')}); refusing empty fallback", file=sys.stderr)
         return False
     # Refuse stale bundles; the shell script must not apply unrelated local content.
     if out.exists() and any(out.iterdir()):
