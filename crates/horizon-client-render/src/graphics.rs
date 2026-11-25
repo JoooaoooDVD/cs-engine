@@ -39,6 +39,7 @@ pub fn reported() -> Option<Reported> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Preset {
     Performance,
+    MaxFps,
     Balanced,
     Quality,
     Ultra,
@@ -46,8 +47,9 @@ pub enum Preset {
     Custom,
 }
 impl Preset {
-    pub const ALL: [Preset; 5] = [
+    pub const ALL: [Preset; 6] = [
         Preset::Performance,
+        Preset::MaxFps,
         Preset::Balanced,
         Preset::Quality,
         Preset::Ultra,
@@ -56,6 +58,7 @@ impl Preset {
     pub fn name(self) -> &'static str {
         match self {
             Preset::Performance => "performance",
+            Preset::MaxFps => "max_fps",
             Preset::Balanced => "balanced",
             Preset::Quality => "quality",
             Preset::Ultra => "ultra",
@@ -65,6 +68,7 @@ impl Preset {
     pub fn label(self) -> &'static str {
         match self {
             Preset::Performance => "Performance",
+            Preset::MaxFps => "Max FPS",
             Preset::Balanced => "Balanced",
             Preset::Quality => "Quality",
             Preset::Ultra => "Ultra",
@@ -636,6 +640,7 @@ pub fn apply_preset(preset: Preset, s: &mut crate::settings::Settings) {
     let (rd, sim, clouds, particles, shadows, blend, mipmaps, entity, leaves, weather_r) =
         match preset {
             Preset::Performance => (8, 6, "false", 2, false, 0, 0, 0.5, false, 3),
+            Preset::MaxFps => (4, 4, "false", 2, false, 0, 0, 0.5, false, 2),
             Preset::Balanced => (12, 8, "fast", 1, true, 1, 2, 0.75, true, 5),
             Preset::Quality => (16, 12, "true", 0, true, 2, 4, 1.0, true, 10),
             Preset::Ultra => (24, 12, "true", 0, true, 3, 4, 1.5, true, 10),
@@ -806,6 +811,21 @@ mod tests {
             apply_preset(preset, &mut s);
             assert_eq!(s.horizon.far_detail, FarDetail::Full, "{preset:?}");
         }
+    }
+
+    #[test]
+    fn max_fps_preset_is_conservative_and_round_trips() {
+        let mut s = crate::settings::Settings::default();
+        apply_preset(Preset::MaxFps, &mut s);
+        assert_eq!(s.render_distance, 4);
+        assert_eq!(s.simulation_distance, 4);
+        assert_eq!(s.clouds, "false");
+        assert!(s.horizon.cave_culling);
+        assert!(s.horizon.animated_textures);
+        assert_eq!(
+            Graphics::parse(&s.horizon.serialize()).preset,
+            Preset::MaxFps
+        );
     }
 
     #[test]

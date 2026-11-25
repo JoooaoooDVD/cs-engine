@@ -372,8 +372,16 @@ const LOD_STEPS: [u32; 18] = [
 /// Horizon's graphics screens supplement the vanilla options on Video Settings.
 /// Upscaling is only there while TAA is, which does it.
 fn extra_rows(level: Level, settings: &Settings) -> Vec<Row> {
+    graphics_rows(level, settings, cfg!(target_os = "android"))
+}
+
+/// Android's host launcher needs a single place for both vanilla and engine controls.
+/// Desktop retains the separate vanilla Video Settings screen.
+fn graphics_rows(level: Level, settings: &Settings, android: bool) -> Vec<Row> {
     let mut rows = rows(level);
-    rows.retain(|row| !matches!(row, Row::Setting(s) if matches!(s.item, Item::Vanilla(_))));
+    if !android {
+        rows.retain(|row| !matches!(row, Row::Setting(s) if matches!(s.item, Item::Vanilla(_))));
+    }
     if !settings.horizon.taa {
         rows.retain(|row| !matches!(row, Row::Setting(s) if s.item == Item::Horizon(H::Upscaling)));
     }
@@ -1024,6 +1032,8 @@ impl GraphicsUi {
             self.scroll.amount,
         );
         let title = match level {
+            Level::Simple if cfg!(target_os = "android") => "CS Engine: Video Settings",
+            Level::Advanced if cfg!(target_os = "android") => "CS Engine: Advanced",
             Level::Simple => "Graphics",
             Level::Advanced => "Graphics: Advanced",
             Level::Hdr => "Graphics: HDR",
@@ -1130,6 +1140,20 @@ impl GraphicsUi {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn android_graphics_includes_vanilla_and_engine_controls() {
+        let settings = Settings::default();
+        let android = graphics_rows(Level::Advanced, &settings, true);
+        let desktop = graphics_rows(Level::Advanced, &settings, false);
+        let has = |rows: &[Row], item| {
+            rows.iter().any(|row| matches!(row, Row::Setting(setting) if setting.item == item))
+        };
+        assert!(has(&android, Item::Vanilla(Opt::RenderDistance)));
+        assert!(has(&android, Item::Horizon(H::CaveCulling)));
+        assert!(!has(&desktop, Item::Vanilla(Opt::RenderDistance)));
+        assert!(has(&desktop, Item::Horizon(H::CaveCulling)));
+    }
 
     #[test]
     fn hdr_settings_open_where_hdr_is_offered() {

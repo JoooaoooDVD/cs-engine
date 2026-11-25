@@ -81,11 +81,15 @@ jobs:
         run: |
           cargo test -p cs-brand -p horizon-core
           cargo test -p horizon-e4mc --lib -- opening_tests
-          cargo test -p horizon-client-render --lib -- title_edition crash skins:: cs_voice::
+          cargo test -p horizon-client-render --lib graphics
+          cargo test -p horizon-client-render --lib title_edition
+          cargo test -p horizon-client-render --lib crash
+          cargo test -p horizon-client-render --lib skins::
+          cargo test -p horizon-client-render --lib cs_voice::
 
   build:
     name: Build ${{ matrix.abi }}
-    needs: check
+    needs: [check, tests]
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     strategy:
