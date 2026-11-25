@@ -2410,7 +2410,14 @@ impl OptionsUi {
                 let entries = [
                     ("options.skinCustomisation", Some(Page::Skin)),
                     ("options.sounds", Some(Page::Sound)),
-                    ("options.video", Some(Page::Video)),
+                    (
+                        "options.video",
+                        Some(if cfg!(target_os = "android") {
+                            Page::GraphicsAdvanced
+                        } else {
+                            Page::Video
+                        }),
+                    ),
                     ("options.controls", Some(Page::Controls)),
                     (
                         "options.language",

@@ -810,10 +810,50 @@ pub enum Action {
     Done,
 }
 
+/// Categories used by the touch-friendly Android graphics screen.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum GraphicsTab {
+    #[default]
+    Rendering,
+    Quality,
+    Display,
+    Performance,
+}
+impl GraphicsTab {
+    const ALL: [Self; 4] = [Self::Rendering, Self::Quality, Self::Display, Self::Performance];
+    fn label(self) -> &'static str {
+        match self {
+            Self::Rendering => "Render",
+            Self::Quality => "Quality",
+            Self::Display => "Display",
+            Self::Performance => "Performance",
+        }
+    }
+    fn includes(self, header: &str) -> bool {
+        match self {
+            Self::Rendering => header == "Rendering",
+            Self::Quality => header == "Quality",
+            Self::Display => header == "Display" || header == "Preferences",
+            Self::Performance => header == "Performance" || header == "Overlay",
+        }
+    }
+}
+
+fn tab_rows(rows: Vec<Row>, tab: GraphicsTab) -> Vec<Row> {
+    let mut selected = false;
+    rows.into_iter().filter(|row| {
+        if let Row::Header(header) = row {
+            selected = tab.includes(header);
+        }
+        selected
+    }).collect()
+}
+
 #[derive(Clone, Copy)]
 enum Target {
     Item(Item),
     Button(Action),
+    Tab(GraphicsTab),
 }
 struct Widget {
     x: f32,
@@ -829,6 +869,7 @@ pub struct GraphicsUi {
     /// The list's scroll amount and its held scrollbar (`AbstractScrollArea`).
     scroll: ui::Scroll,
     dragging: Option<Item>,
+    tab: GraphicsTab,
     /// The key binding the options screen is waiting on (`Action::BindKey`).
     pub binding: Option<&'static str>,
 }
@@ -854,6 +895,30 @@ impl GraphicsUi {
                 }
         })
     }
+    fn visible_rows(&self, level: Level, s: &Settings) -> Vec<Row> {
+        let rows = extra_rows(level, s);
+        if cfg!(target_os = "android") && level == Level::Advanced {
+            tab_rows(rows, self.tab)
+        } else {
+            rows
+        }
+    }
+    fn visible_height(&self, level: Level, s: &Settings) -> f32 {
+        self.visible_rows(level, s).iter().fold(4.0, |height, row| {
+            height + match row {
+                Row::Header(_) => STYLE.header_height,
+                Row::Setting(_) => STYLE.row_height,
+            }
+        })
+    }
+    fn screen_bounds(level: Level, h: f32) -> (f32, f32) {
+        let (top, bottom) = Self::bounds(h);
+        if cfg!(target_os = "android") && level == Level::Advanced {
+            (top + 24.0, bottom)
+        } else {
+            (top, bottom)
+        }
+    }
     /// Widgets and the list's content height, using a bounded offset.
     fn layout(
         &mut self,
@@ -862,14 +927,14 @@ impl GraphicsUi {
         w: f32,
         h: f32,
     ) -> (Vec<Widget>, Vec<(f32, &'static str)>, f32) {
-        let content = Self::content_height(level, s);
-        self.clamp_scroll(h, content);
-        let (top, _) = Self::bounds(h);
+        let content = self.visible_height(level, s);
+        let (top, bottom) = Self::screen_bounds(level, h);
+        self.scroll.clamp(top, bottom, content);
         let x = STYLE.row_x(w);
         let mut y = top + 4.0 - self.scroll.amount;
         let mut widgets = Vec::new();
         let mut headers = Vec::new();
-        for row in extra_rows(level, s) {
+        for row in self.visible_rows(level, s) {
             match row {
                 Row::Header(name) => {
                     headers.push((y, name));
@@ -885,6 +950,19 @@ impl GraphicsUi {
                     });
                     y += STYLE.row_height;
                 }
+            }
+        }
+        if cfg!(target_os = "android") && level == Level::Advanced {
+            let tab_width = ((w - 16.0) / 4.0).min(100.0);
+            let left = (w - 4.0 * tab_width) / 2.0;
+            for (index, tab) in GraphicsTab::ALL.into_iter().enumerate() {
+                widgets.push(Widget {
+                    x: left + index as f32 * tab_width,
+                    y: STYLE.band + 1.0,
+                    w: tab_width - 2.0,
+                    target: Target::Tab(tab),
+                    list: false,
+                });
             }
         }
         let cx = (w / 2.0).floor();
@@ -935,7 +1013,7 @@ impl GraphicsUi {
     ) {
         let (w, h) = (batch.width, batch.height);
         let (widgets, headers, content) = self.layout(level, s, w, h);
-        let (top, bottom) = Self::bounds(h);
+        let (top, bottom) = Self::screen_bounds(level, h);
         STYLE.background(batch, atlas, top, bottom, in_world);
         let shown = |y: f32, height: f32| y >= top && y + height <= bottom;
         let x = STYLE.row_x(w);
@@ -944,7 +1022,7 @@ impl GraphicsUi {
                 STYLE.header(batch, atlas, &Text::literal(lang::get(name)), x, y);
             }
         }
-        let descriptions: Vec<(Cost, &'static str)> = extra_rows(level, s)
+        let descriptions: Vec<(Cost, &'static str)> = self.visible_rows(level, s)
             .into_iter()
             .filter_map(|r| match r {
                 Row::Setting(s) => Some((s.cost, s.text)),
@@ -1004,6 +1082,14 @@ impl GraphicsUi {
                         description(item, s, text),
                     );
                 }
+                Target::Tab(tab) => {
+                    let label = if tab == self.tab {
+                        format!("[{}]", tab.label())
+                    } else {
+                        tab.label().to_owned()
+                    };
+                    STYLE.button(batch, atlas, (wd.x, wd.y, wd.w), &Text::literal(label), hover, true);
+                }
                 Target::Button(action) => {
                     let label = match action {
                         Action::OpenAdvanced => "Advanced...",
@@ -1055,7 +1141,7 @@ impl GraphicsUi {
         right: bool,
     ) -> Vec<Action> {
         let (widgets, _, content) = self.layout(level, s, w, h);
-        let (top, bottom) = Self::bounds(h);
+        let (top, bottom) = Self::screen_bounds(level, h);
         if drag {
             // AbstractScrollArea.mouseDragged: the held scrollbar follows the pointer.
             if self.scroll.held() {
@@ -1091,6 +1177,12 @@ impl GraphicsUi {
             }
             return match wd.target {
                 Target::Button(action) => vec![Action::ButtonClick, action],
+                Target::Tab(tab) => {
+                    self.tab = tab;
+                    self.scroll = ui::Scroll::default();
+                    self.dragging = None;
+                    vec![Action::ButtonClick]
+                }
                 // A disabled control does nothing: no sound, no preset change.
                 Target::Item(item) if item.blocked(s).is_some() => Vec::new(),
                 Target::Item(Item::Horizon(H::HdrSettings)) => {
@@ -1130,8 +1222,8 @@ impl GraphicsUi {
         self.dragging.take().is_some()
     }
     pub fn scroll(&mut self, level: Level, s: &Settings, h: f32, amount: f32) {
-        let content = Self::content_height(level, s);
-        let (top, bottom) = Self::bounds(h);
+        let content = self.visible_height(level, s);
+        let (top, bottom) = Self::screen_bounds(level, h);
         self.scroll.clamp(top, bottom, content);
         self.scroll.wheel(amount, 18.0, top, bottom, content);
     }
@@ -1140,6 +1232,22 @@ impl GraphicsUi {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn android_tabs_cover_every_advanced_control() {
+        let settings = Settings::default();
+        let all = graphics_rows(Level::Advanced, &settings, true);
+        let total = all.iter().filter(|row| matches!(row, Row::Setting(_))).count();
+        let in_tabs: usize = GraphicsTab::ALL.into_iter().map(|tab| {
+            tab_rows(graphics_rows(Level::Advanced, &settings, true), tab)
+                .iter().filter(|row| matches!(row, Row::Setting(_))).count()
+        }).sum();
+        assert_eq!(total, in_tabs);
+        for tab in GraphicsTab::ALL {
+            assert!(tab_rows(graphics_rows(Level::Advanced, &settings, true), tab)
+                .iter().any(|row| matches!(row, Row::Setting(_))));
+        }
+    }
 
     #[test]
     fn android_graphics_includes_vanilla_and_engine_controls() {
