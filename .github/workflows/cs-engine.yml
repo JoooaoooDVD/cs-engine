@@ -26,6 +26,8 @@ concurrency:
   cancel-in-progress: true
 env:
   HORIZON_TELEMETRY_URL: "off"
+  # On a registry 404, only match a previous release that also had no native mods.
+  CS_EMPTY_REGISTRY_FALLBACK: "1"
   CARGO_TARGET_DIR: .local/ci-target
   CARGO_TERM_COLOR: always
   # Upstream public APK whose generated engine tables match this source (tools unchanged since v0.7.6).
@@ -79,6 +81,7 @@ jobs:
           shared-key: cs-engine-host-tests
       - name: cargo test
         run: |
+          python3 -m unittest discover -s tests -p test_cs_native_registry_fallback.py
           cargo test -p cs-brand -p horizon-core
           cargo test -p horizon-e4mc --lib -- opening_tests
           cargo test -p horizon-client-render --lib graphics

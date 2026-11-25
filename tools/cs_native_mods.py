@@ -7,10 +7,51 @@ to the commit being built (the mods use only the stable hook points; the launche
 same, launcher/src/native_mods.rs `repin`). The game's NATIVE_HOOKS_API must be at least each
 mod's `hooks`.
 """
-import hashlib, io, json, pathlib, re, subprocess, sys, urllib.request, zipfile
+import hashlib, io, json, os, pathlib, re, subprocess, sys, urllib.error, urllib.request, zipfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 INDEX = "https://horizon-rust.github.io/horizon-mods/index.json"
+
+
+def missing_registry_fallback(ids, out):
+    """Proceed only if explicitly allowed and the current release has no built native mods.
+
+    Never silently replace an existing release containing native mods with an empty one.
+    A missing release/manifest, invalid data, or any fetch error fails closed.
+    """
+    repo = os.environ.get("GITHUB_REPOSITORY", "")
+    if os.environ.get("CS_EMPTY_REGISTRY_FALLBACK") != "1" or not re.fullmatch(
+        r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo
+    ):
+        return False
+    request = urllib.request.Request(
+        f"https://api.github.com/repos/{repo}/releases/tags/cs-engine-latest",
+        headers={"User-Agent": "cs-engine-ci", "Accept": "application/vnd.github+json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            release = json.load(response)
+        manifest = next(a for a in release["assets"] if a["name"] == "cs-native-mods.json")
+        # Follow only the same repository's GitHub release URL, never arbitrary URLs.
+        url = manifest["browser_download_url"]
+        if not url.startswith(f"https://github.com/{repo}/releases/download/"):
+            return False
+        with urllib.request.urlopen(url, timeout=60) as response:
+            previous = json.load(response)
+        if previous.get("built") != [] or not isinstance(previous.get("skipped"), list):
+            return False
+    except (OSError, ValueError, KeyError, StopIteration, TypeError):
+        return False
+    # Refuse stale bundles; the shell script must not apply unrelated local content.
+    if out.exists() and any(out.iterdir()):
+        return False
+    out.mkdir(parents=True, exist_ok=True)
+    reason = "native mod registry unavailable (HTTP 404); previous release had no built native mods"
+    (out.parent / "cs-native-mods.json").write_text(
+        json.dumps({"built": [], "skipped": [{"id": id_, "reason": reason} for id_ in ids]}, indent=2)
+    )
+    print(f"::warning::{reason}; {len(ids)} mods skipped")
+    return True
 
 
 def main():
@@ -23,7 +64,13 @@ def main():
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     hooks_api = int(re.search(r"NATIVE_HOOKS_API: u32 = (\d+)",
                               (ROOT / "crates/horizon-client/src/game/native_hooks.rs").read_text()).group(1))
-    index = json.load(urllib.request.urlopen(INDEX, timeout=60))
+    try:
+        with urllib.request.urlopen(INDEX, timeout=60) as response:
+            index = json.load(response)
+    except urllib.error.HTTPError as error:
+        if error.code == 404 and missing_registry_fallback(ids, out):
+            return
+        raise
     projects = {p["id"]: p for p in index["projects"]}
     revoked = {r.get("id") for r in index.get("revoked", []) if isinstance(r, dict)}
     out.mkdir(parents=True, exist_ok=True)
