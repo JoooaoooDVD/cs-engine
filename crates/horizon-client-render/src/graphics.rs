@@ -637,6 +637,12 @@ impl Graphics {
 
 /// A preset's values for vanilla's options and Horizon's own.
 pub fn apply_preset(preset: Preset, s: &mut crate::settings::Settings) {
+    apply_preset_for_platform(preset, s, cfg!(target_os = "android"));
+}
+
+/// Android profiles are explicit opt-in choices, not hardware detection.
+/// The world scale compounds the launcher render scale, so profiles stay conservative.
+pub fn apply_preset_for_platform(preset: Preset, s: &mut crate::settings::Settings, android: bool) {
     let (rd, sim, clouds, particles, shadows, blend, mipmaps, entity, leaves, weather_r) =
         match preset {
             Preset::Performance => (8, 6, "false", 2, false, 0, 0, 0.5, false, 3),
@@ -666,11 +672,50 @@ pub fn apply_preset(preset: Preset, s: &mut crate::settings::Settings) {
     g.sky = true;
     g.fog = true;
     g.weather = true;
+    if android {
+        g.resolution_scale = match preset {
+            Preset::MaxFps => 70,
+            Preset::Performance => 80,
+            Preset::Balanced => 90,
+            Preset::Quality | Preset::Ultra => 100,
+            Preset::Custom => unreachable!(),
+        };
+        // Preserve Android's adaptive upload scheduler (0 = automatic there).
+        // Do not silently change the overlay, battery, FPS cap, or player data.
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn android_profiles_are_explicit_and_preserve_display_preferences() {
+        let mut s = crate::settings::Settings::default();
+        s.horizon.overlay = Overlay::Graph;
+        s.horizon.battery = true;
+        for (preset, distance, scale) in [
+            (Preset::MaxFps, 4, 70),
+            (Preset::Performance, 8, 80),
+            (Preset::Balanced, 12, 90),
+            (Preset::Quality, 16, 100),
+            (Preset::Ultra, 24, 100),
+        ] {
+            apply_preset_for_platform(preset, &mut s, true);
+            assert_eq!(s.horizon.preset, preset);
+            assert_eq!(s.render_distance, distance);
+            assert_eq!(s.horizon.resolution_scale, scale);
+            assert_eq!(s.horizon.chunk_updates, 0);
+            assert_eq!(s.horizon.upload_budget_kib, 0);
+            assert_eq!(s.horizon.overlay, Overlay::Graph);
+            assert!(s.horizon.battery);
+        }
+        apply_preset_for_platform(Preset::Custom, &mut s, true);
+        assert_eq!(s.horizon.preset, Preset::Ultra);
+        s.horizon.resolution_scale = 75;
+        apply_preset_for_platform(Preset::Balanced, &mut s, false);
+        assert_eq!(s.horizon.resolution_scale, 75);
+    }
 
     #[test]
     fn the_api_choice_matches_the_system() {

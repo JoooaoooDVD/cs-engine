@@ -381,6 +381,36 @@ fn graphics_rows(level: Level, settings: &Settings, android: bool) -> Vec<Row> {
     let mut rows = rows(level);
     if !android {
         rows.retain(|row| !matches!(row, Row::Setting(s) if matches!(s.item, Item::Vanilla(_))));
+    } else if level == Level::Simple {
+        // Frequently used phone controls on the first page, without losing the
+        // full set in the categorized Advanced screen.
+        rows.extend([
+            h(
+                H::ResolutionScale,
+                Cost::High,
+                "World resolution; combines with launcher scale.",
+            ),
+            h(
+                H::ChunkUpdates,
+                Cost::Low,
+                "Mesh uploads per frame. Zero uses Android auto.",
+            ),
+            h(
+                H::UploadBudget,
+                Cost::Low,
+                "Upload limit. Zero uses Android auto.",
+            ),
+            h(
+                H::BatteryMode,
+                Cost::None,
+                "Caps FPS and reduces workers to save power.",
+            ),
+            h(
+                H::Overlay,
+                Cost::None,
+                "Show FPS, frame times, 1% low and a graph.",
+            ),
+        ]);
     }
     if !settings.horizon.taa {
         rows.retain(|row| !matches!(row, Row::Setting(s) if s.item == Item::Horizon(H::Upscaling)));
@@ -485,7 +515,18 @@ impl H {
     fn label(self, s: &Settings) -> Text {
         let g = &s.horizon;
         match self {
-            H::Preset => labelled("Preset", g.preset.label()),
+            H::Preset => labelled(
+                "Preset",
+                if cfg!(target_os = "android") {
+                    match g.preset {
+                        Preset::MaxFps => "Low-end",
+                        Preset::Performance => "High FPS",
+                        _ => g.preset.label(),
+                    }
+                } else {
+                    g.preset.label()
+                },
+            ),
             H::LodDistance => match g.lod_distance {
                 0 => labelled("LOD Distance", "Off"),
                 n => labelled("LOD Distance", lang::tr("%s chunks", &[&n])),
@@ -494,11 +535,25 @@ impl H {
             H::CaveCulling => labelled("Cave Culling", on_off(g.cave_culling)),
             H::EntityCulling => labelled("Entity Culling", on_off(g.entity_culling)),
             H::ChunkUpdates => match g.chunk_updates {
-                0 => labelled("Chunk Updates", "Unlimited"),
+                0 => labelled(
+                    "Chunk Updates",
+                    if cfg!(target_os = "android") {
+                        "Auto"
+                    } else {
+                        "Unlimited"
+                    },
+                ),
                 n => labelled("Chunk Updates", lang::tr("%s per frame", &[&n])),
             },
             H::UploadBudget => match g.upload_budget_kib {
-                0 => labelled("Upload Budget", "Unlimited"),
+                0 => labelled(
+                    "Upload Budget",
+                    if cfg!(target_os = "android") {
+                        "Auto"
+                    } else {
+                        "Unlimited"
+                    },
+                ),
                 k if k >= 1024 => {
                     labelled("Upload Budget", lang::tr("%s MiB/frame", &[&(k / 1024)]))
                 }
@@ -820,7 +875,12 @@ enum GraphicsTab {
     Performance,
 }
 impl GraphicsTab {
-    const ALL: [Self; 4] = [Self::Rendering, Self::Quality, Self::Display, Self::Performance];
+    const ALL: [Self; 4] = [
+        Self::Rendering,
+        Self::Quality,
+        Self::Display,
+        Self::Performance,
+    ];
     fn label(self) -> &'static str {
         match self {
             Self::Rendering => "Render",
@@ -841,12 +901,14 @@ impl GraphicsTab {
 
 fn tab_rows(rows: Vec<Row>, tab: GraphicsTab) -> Vec<Row> {
     let mut selected = false;
-    rows.into_iter().filter(|row| {
-        if let Row::Header(header) = row {
-            selected = tab.includes(header);
-        }
-        selected
-    }).collect()
+    rows.into_iter()
+        .filter(|row| {
+            if let Row::Header(header) = row {
+                selected = tab.includes(header);
+            }
+            selected
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy)]
@@ -905,10 +967,11 @@ impl GraphicsUi {
     }
     fn visible_height(&self, level: Level, s: &Settings) -> f32 {
         self.visible_rows(level, s).iter().fold(4.0, |height, row| {
-            height + match row {
-                Row::Header(_) => STYLE.header_height,
-                Row::Setting(_) => STYLE.row_height,
-            }
+            height
+                + match row {
+                    Row::Header(_) => STYLE.header_height,
+                    Row::Setting(_) => STYLE.row_height,
+                }
         })
     }
     fn screen_bounds(level: Level, h: f32) -> (f32, f32) {
@@ -1022,7 +1085,8 @@ impl GraphicsUi {
                 STYLE.header(batch, atlas, &Text::literal(lang::get(name)), x, y);
             }
         }
-        let descriptions: Vec<(Cost, &'static str)> = self.visible_rows(level, s)
+        let descriptions: Vec<(Cost, &'static str)> = self
+            .visible_rows(level, s)
             .into_iter()
             .filter_map(|r| match r {
                 Row::Setting(s) => Some((s.cost, s.text)),
@@ -1088,7 +1152,24 @@ impl GraphicsUi {
                     } else {
                         tab.label().to_owned()
                     };
-                    STYLE.button(batch, atlas, (wd.x, wd.y, wd.w), &Text::literal(label), hover, true);
+                    STYLE.button(
+                        batch,
+                        atlas,
+                        (wd.x, wd.y, wd.w),
+                        &Text::literal(label),
+                        hover,
+                        true,
+                    );
+                    if tab == self.tab && cfg!(target_os = "android") {
+                        batch.fill(
+                            atlas,
+                            wd.x,
+                            wd.y + 19.0,
+                            wd.w,
+                            1.0,
+                            crate::hud::rgba(64, 205, 255, 255),
+                        );
+                    }
                 }
                 Target::Button(action) => {
                     let label = match action {
@@ -1118,8 +1199,8 @@ impl GraphicsUi {
             self.scroll.amount,
         );
         let title = match level {
-            Level::Simple if cfg!(target_os = "android") => "CS Engine: Video Settings",
-            Level::Advanced if cfg!(target_os = "android") => "CS Engine: Advanced",
+            Level::Simple if cfg!(target_os = "android") => "CS ENGINE | VIDEO SETTINGS",
+            Level::Advanced if cfg!(target_os = "android") => "CS ENGINE | ADVANCED",
             Level::Simple => "Graphics",
             Level::Advanced => "Graphics: Advanced",
             Level::Hdr => "Graphics: HDR",
@@ -1234,18 +1315,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn android_quick_screen_includes_performance_controls() {
+        let settings = Settings::default();
+        let rows = graphics_rows(Level::Simple, &settings, true);
+        for item in [
+            H::Preset,
+            H::ResolutionScale,
+            H::ChunkUpdates,
+            H::UploadBudget,
+            H::BatteryMode,
+            H::Overlay,
+        ] {
+            assert!(
+                rows.iter()
+                    .any(|row| matches!(row, Row::Setting(s) if s.item == Item::Horizon(item)))
+            );
+        }
+        let desktop = graphics_rows(Level::Simple, &settings, false);
+        assert!(
+            !desktop.iter().any(
+                |row| matches!(row, Row::Setting(s) if s.item == Item::Horizon(H::BatteryMode))
+            )
+        );
+    }
+
+    #[test]
     fn android_tabs_cover_every_advanced_control() {
         let settings = Settings::default();
         let all = graphics_rows(Level::Advanced, &settings, true);
-        let total = all.iter().filter(|row| matches!(row, Row::Setting(_))).count();
-        let in_tabs: usize = GraphicsTab::ALL.into_iter().map(|tab| {
-            tab_rows(graphics_rows(Level::Advanced, &settings, true), tab)
-                .iter().filter(|row| matches!(row, Row::Setting(_))).count()
-        }).sum();
+        let total = all
+            .iter()
+            .filter(|row| matches!(row, Row::Setting(_)))
+            .count();
+        let in_tabs: usize = GraphicsTab::ALL
+            .into_iter()
+            .map(|tab| {
+                tab_rows(graphics_rows(Level::Advanced, &settings, true), tab)
+                    .iter()
+                    .filter(|row| matches!(row, Row::Setting(_)))
+                    .count()
+            })
+            .sum();
         assert_eq!(total, in_tabs);
         for tab in GraphicsTab::ALL {
-            assert!(tab_rows(graphics_rows(Level::Advanced, &settings, true), tab)
-                .iter().any(|row| matches!(row, Row::Setting(_))));
+            assert!(
+                tab_rows(graphics_rows(Level::Advanced, &settings, true), tab)
+                    .iter()
+                    .any(|row| matches!(row, Row::Setting(_)))
+            );
         }
     }
 
@@ -1255,7 +1372,8 @@ mod tests {
         let android = graphics_rows(Level::Advanced, &settings, true);
         let desktop = graphics_rows(Level::Advanced, &settings, false);
         let has = |rows: &[Row], item| {
-            rows.iter().any(|row| matches!(row, Row::Setting(setting) if setting.item == item))
+            rows.iter()
+                .any(|row| matches!(row, Row::Setting(setting) if setting.item == item))
         };
         assert!(has(&android, Item::Vanilla(Opt::RenderDistance)));
         assert!(has(&android, Item::Horizon(H::CaveCulling)));

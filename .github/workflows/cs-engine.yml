@@ -82,6 +82,7 @@ jobs:
           cargo test -p cs-brand -p horizon-core
           cargo test -p horizon-e4mc --lib -- opening_tests
           cargo test -p horizon-client-render --lib graphics
+          cargo test -p horizon-client --no-default-features --lib perf_overlay::tests
           cargo test -p horizon-client-render --lib title_edition
           cargo test -p horizon-client-render --lib crash
           cargo test -p horizon-client-render --lib skins::

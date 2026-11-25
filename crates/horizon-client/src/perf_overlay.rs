@@ -22,6 +22,24 @@ impl FrameGraph {
         }
         self.frames.push_back((frame_ms, cpu_ms, gpu));
     }
+    /// FPS at the 99th percentile frame time over up to 160 recent frames.
+    /// Selection is linear and uses a fixed stack buffer, without per-frame heap allocation.
+    fn one_percent_low(&self) -> f32 {
+        let mut times = [0.0_f32; HISTORY];
+        let mut n = 0;
+        for &(ms, _, _) in &self.frames {
+            if ms.is_finite() && ms > 0.0 {
+                times[n] = ms;
+                n += 1;
+            }
+        }
+        if n == 0 {
+            return 0.0;
+        }
+        let index = n - 1 - (n - 1) / 100;
+        let (_, value, _) = times[..n].select_nth_unstable_by(index, f32::total_cmp);
+        1000.0 / *value
+    }
     pub fn draw(&self, mode: Overlay, batch: &mut HudBatch, atlas: &HudAtlas) {
         if mode == Overlay::Off || self.frames.is_empty() {
             return;
@@ -30,8 +48,9 @@ impl FrameGraph {
         let avg = |f: fn(&(f32, f32, f32)) -> f32| self.frames.iter().map(f).sum::<f32>() / n;
         let (frame, cpu, gpu) = (avg(|f| f.0), avg(|f| f.1), avg(|f| f.2));
         let worst = self.frames.iter().map(|f| f.0).fold(0.0f32, f32::max);
+        let low = self.one_percent_low();
         let lines = [
-            format!("{:.0} fps", 1000.0 / frame.max(0.001)),
+            format!("{:.0} fps  1% low {low:.0}", 1000.0 / frame.max(0.001)),
             format!("frame {frame:.1} ms  max {worst:.1}"),
             format!("cpu {cpu:.1}  gpu {gpu:.1} ms"),
         ];
@@ -106,5 +125,26 @@ impl FrameGraph {
                 rgba(255, 255, 255, 90),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn low_uses_recent_finite_frame_times_and_bounded_history() {
+        let mut graph = FrameGraph::default();
+        assert_eq!(graph.one_percent_low(), 0.0);
+        for i in 0..160 {
+            graph.record(if i < 2 { 50.0 } else { 10.0 }, 1.0, None);
+        }
+        assert_eq!(graph.one_percent_low(), 20.0);
+        graph.record(10.0, 1.0, None);
+        assert_eq!(graph.one_percent_low(), 100.0);
+        for _ in 0..160 {
+            graph.record(f32::NAN, 1.0, None);
+        }
+        assert_eq!(graph.one_percent_low(), 0.0);
     }
 }

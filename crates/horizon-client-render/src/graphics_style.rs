@@ -2,7 +2,7 @@
 //! colours and the widgets they draw with. The screens (`graphics_ui`) only
 //! lay out rows and handle input; a menu theme replaces this module.
 use crate::{
-    hud::{HudAtlas, HudBatch},
+    hud::{HudAtlas, HudBatch, rgba},
     lang,
     text::Text,
     ui,
@@ -92,8 +92,22 @@ impl Style {
         in_world: bool,
     ) {
         let (w, h) = (batch.width, batch.height);
-        ui::menu_background(batch, atlas, 0.0, 0.0, w, h, in_world);
-        ui::list_background(batch, atlas, top, bottom, in_world);
+        if cfg!(target_os = "android") {
+            // Dark, high-contrast panels inspired by performance-oriented video menus.
+            batch.fill(atlas, 0.0, 0.0, w, h, rgba(12, 18, 27, 245));
+            batch.fill(
+                atlas,
+                0.0,
+                top,
+                w,
+                (bottom - top).max(0.0),
+                rgba(21, 30, 42, 255),
+            );
+            batch.fill(atlas, 0.0, 0.0, w, 2.0, rgba(64, 205, 255, 255));
+        } else {
+            ui::menu_background(batch, atlas, 0.0, 0.0, w, h, in_world);
+            ui::list_background(batch, atlas, top, bottom, in_world);
+        }
     }
     pub fn frame(
         &self,
@@ -103,7 +117,12 @@ impl Style {
         bottom: f32,
         in_world: bool,
     ) {
-        ui::separators(batch, atlas, top, bottom, in_world);
+        if cfg!(target_os = "android") {
+            batch.fill(atlas, 0.0, top, batch.width, 1.0, rgba(58, 78, 96, 255));
+            batch.fill(atlas, 0.0, bottom, batch.width, 1.0, rgba(58, 78, 96, 255));
+        } else {
+            ui::separators(batch, atlas, top, bottom, in_world);
+        }
     }
     pub fn title(&self, batch: &mut HudBatch, atlas: &HudAtlas, text: &Text) {
         let w = batch.width;
@@ -121,7 +140,32 @@ impl Style {
         hover: bool,
         active: bool,
     ) {
+        // Keep the vanilla widget registration/controller targets, then paint
+        // the Android skin over the sprite without changing hit testing.
         ui::button(batch, atlas, x, y, w, 20.0, label, active, hover);
+        if cfg!(target_os = "android") {
+            let color = if !active {
+                rgba(38, 44, 52, 255)
+            } else if hover {
+                rgba(48, 79, 101, 255)
+            } else {
+                rgba(35, 49, 64, 255)
+            };
+            batch.fill(atlas, x, y, w, 20.0, color);
+            ui::centered_text(
+                batch,
+                atlas,
+                label,
+                x + 2.0,
+                y + 6.0,
+                w - 4.0,
+                if active {
+                    u32::MAX
+                } else {
+                    rgba(150, 160, 170, 255)
+                },
+            );
+        }
     }
     pub fn slider(
         &self,
@@ -146,6 +190,34 @@ impl Style {
             active,
             dragging && active,
         );
+        if cfg!(target_os = "android") {
+            batch.fill(atlas, x, y, w, 20.0, rgba(35, 49, 64, 255));
+            batch.fill(
+                atlas,
+                x,
+                y + 18.0,
+                w * value.clamp(0.0, 1.0),
+                2.0,
+                if active {
+                    rgba(64, 205, 255, 255)
+                } else {
+                    rgba(90, 100, 110, 255)
+                },
+            );
+            ui::centered_text(
+                batch,
+                atlas,
+                label,
+                x + 2.0,
+                y + 6.0,
+                w - 4.0,
+                if active {
+                    u32::MAX
+                } else {
+                    rgba(150, 160, 170, 255)
+                },
+            );
+        }
     }
     /// The cost tag and the description beside a control, wrapped to two lines.
     pub fn description(
